@@ -1,0 +1,49 @@
+# -*- coding:utf-8 -*-
+import FreeCAD as App, FreeCADGui as Gui, Part
+
+doc_name="Ammonia_SatMotor"
+if App.ActiveDocument is None or App.ActiveDocument.Label!=doc_name:
+    App.newDocument(doc_name)
+doc=App.ActiveDocument
+
+P={
+    "tank_len":2000.0, "tank_d":1200.0, "hull_t":15.0,
+    "nozzle_throat_d":300.0, "nozzle_exit_d":900.0, "nozzle_l":800.0,
+    "flange_d":200.0, "flange_l":100.0
+}
+
+X_AXIS=App.Vector(1,0,0); Y_AXIS=App.Vector(0,1,0)
+
+def rot_to_x(): return App.Rotation(Y_AXIS,90)
+def add_obj(s,l): o=doc.addObject("Part::Feature",l); o.Shape=s; return o
+
+# Tanque cilíndrico
+tank=Part.makeCylinder(P["tank_d"]/2, P["tank_len"])
+tank.Placement=App.Placement(App.Vector(-P["tank_len"]/2,0,0), rot_to_x())
+tank_obj=add_obj(tank,"Tank")
+
+# Hueco interno
+inner=Part.makeCylinder((P["tank_d"]/2)-P["hull_t"], P["tank_len"])
+inner.Placement=tank.Placement
+hull=tank.cut(inner)
+hull_obj=add_obj(hull,"Hull")
+
+# Tobera
+noz=Part.makeCone(P["nozzle_throat_d"]/2, P["nozzle_exit_d"]/2, P["nozzle_l"])
+noz.Placement=App.Placement(App.Vector(P["tank_len"]/2,0,0), rot_to_x())
+noz_obj=add_obj(noz,"Nozzle")
+
+# Brida lateral
+flange=Part.makeCylinder(P["flange_d"]/2, P["flange_l"])
+flange.Placement=App.Placement(App.Vector(0,P["tank_d"]/2,0), App.Rotation(App.Vector(0,0,1),90))
+flange_obj=add_obj(flange,"Flange")
+
+# Agrupar
+grp=doc.addObject("App::Part","AmmoniaMotor")
+for o in [hull_obj,noz_obj,flange_obj]: grp.addObject(o)
+
+doc.recompute()
+try:
+    Gui.ActiveDocument.ActiveView.viewAxonometric()
+    Gui.SendMsgToActiveView("ViewFit")
+except: pass
