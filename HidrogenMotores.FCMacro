@@ -1,0 +1,104 @@
+# -*- coding: utf-8 -*-
+# FreeCAD Macro: Motor H2 Cuántico con Propulsor Tokamak + Inyectores + Combustión + Criogenia
+# Autor: Víctor + Copilot
+import FreeCAD as App, FreeCADGui as Gui, Part, Draft, math
+
+doc_name = "Motor_H2_Cuantico"
+if App.ActiveDocument is None or App.ActiveDocument.Label != doc_name:
+    App.newDocument(doc_name)
+doc = App.ActiveDocument
+
+# -----------------------------
+# Parámetros del motor
+# -----------------------------
+P = {}
+P["mid_d"] = 1800.0
+P["rear_d"] = 2000.0
+P["reactor_d"] = 1500.0
+P["reactor_l"] = 1600.0
+P["ring_ro"] = 1000.0
+P["ring_ri"] = 950.0
+P["ring_n"] = 18
+P["ring_pitch"] = 100.0
+P["coil_R"] = 1100.0
+P["coil_n"] = 12
+P["coil_span"] = 1600.0
+P["nozzle_exit_d"] = 1600.0
+P["nozzle_l"] = 1500.0
+
+# Nuevos parámetros
+P["comb_len"] = 600.0
+P["comb_d"] = 1000.0
+P["injector_r"] = 50.0
+P["injector_l"] = 300.0
+P["injector_n"] = 12
+P["cryo_d"] = 800.0
+P["cryo_l"] = 1200.0
+
+# -----------------------------
+# Utilidades geométricas
+# -----------------------------
+def cyl_shape_x(diam, length, cx=0, cy=0, cz=0):
+    r = diam/2
+    return Part.makeCylinder(r, length, App.Vector(cx,cy,cz), App.Vector(1,0,0))
+
+def add_obj(shape, name, color=(0.8,0.8,0.8)):
+    obj = doc.addObject("Part::Feature", name)
+    obj.Shape = shape
+    obj.ViewObject.DisplayMode = "Shaded"
+    obj.ViewObject.ShapeColor = color
+    return obj
+
+# -----------------------------
+# Estructura principal
+# -----------------------------
+cuerpo_grp = doc.addObject("App::DocumentObjectGroup","Cuerpo")
+
+# Reactor
+reactor_s = cyl_shape_x(P["reactor_d"], P["reactor_l"], cx=0)
+reactor_obj = add_obj(reactor_s, "Reactor", (0.7,0.7,0.9))
+cuerpo_grp.addObject(reactor_obj)
+
+# Cámara de combustión
+comb_s = cyl_shape_x(P["comb_d"], P["comb_len"], cx=-P["reactor_l"]/2 - P["comb_len"]/2)
+comb_obj = add_obj(comb_s, "Combustion_Chamber", (0.9,0.6,0.3))
+cuerpo_grp.addObject(comb_obj)
+
+# Inyectores alrededor de la cámara
+for i in range(P["injector_n"]):
+    angle = i * (360.0/P["injector_n"])
+    rad = math.radians(angle)
+    x = -P["reactor_l"]/2 - P["comb_len"]
+    y = (P["comb_d"]/2 + 100) * math.cos(rad)
+    z = (P["comb_d"]/2 + 100) * math.sin(rad)
+    inj_s = Part.makeCylinder(P["injector_r"], P["injector_l"], App.Vector(x,y,z), App.Vector(1,0,0))
+    inj_obj = add_obj(inj_s, f"Injector_{i}", (0.3,0.9,0.3))
+    cuerpo_grp.addObject(inj_obj)
+
+# Compartimento criogénico
+cryo_s = cyl_shape_x(P["cryo_d"], P["cryo_l"], cx=P["reactor_l"]/2 + P["cryo_l"]/2 + 200)
+cryo_obj = add_obj(cryo_s, "Cryo_Compartment", (0.4,0.9,0.9))
+cuerpo_grp.addObject(cryo_obj)
+
+# -----------------------------
+# Bobinas, anillos, tobera (simplificado)
+# -----------------------------
+for i in range(P["coil_n"]):
+    cx = -P["coil_span"]/2 + i*(P["coil_span"]/(P["coil_n"]-1))
+    coil_s = cyl_shape_x(P["coil_R"]*2, 50, cx=cx)
+    coil_obj = add_obj(coil_s, f"Coil_{i}", (0.1,0.1,0.9))
+    cuerpo_grp.addObject(coil_obj)
+
+for i in range(P["ring_n"]):
+    cx = -P["reactor_l"]/2 + i*P["ring_pitch"]
+    ring_s = Part.makeCylinder(P["ring_ro"], 50, App.Vector(cx,0,0), App.Vector(1,0,0))
+    ring_hole = Part.makeCylinder(P["ring_ri"], 60, App.Vector(cx,0,0), App.Vector(1,0,0))
+    ring_s = ring_s.cut(ring_hole)
+    ring_obj = add_obj(ring_s, f"Ring_{i}", (0.8,0.5,0.2))
+    cuerpo_grp.addObject(ring_obj)
+
+nozzle_s = cyl_shape_x(P["nozzle_exit_d"], P["nozzle_l"], cx=P["reactor_l"]/2 + P["nozzle_l"]/2)
+nozzle_obj = add_obj(nozzle_s, "Nozzle", (0.6,0.6,0.6))
+cuerpo_grp.addObject(nozzle_obj)
+
+Gui.ActiveDocument.ActiveView.fitAll()

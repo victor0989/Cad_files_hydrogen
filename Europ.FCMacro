@@ -1,0 +1,76 @@
+# -*- coding: utf-8 -*-
+# FreeCAD Macro: Cuerpo robusto con blindaje y volumen interno
+# Autor: Víctor + Copilot
+# Unidades: mm, eje longitudinal = X
+
+import FreeCAD as App, FreeCADGui as Gui, Part, math
+
+doc_name = "NaveRobusta_Clipper"
+if App.ActiveDocument is None or App.ActiveDocument.Label != doc_name:
+    App.newDocument(doc_name)
+doc = App.ActiveDocument
+
+X_AXIS=App.Vector(1,0,0); Y_AXIS=App.Vector(0,1,0); Z_AXIS=App.Vector(0,0,1)
+def rot_to_x(): return App.Rotation(Y_AXIS,90)
+
+def add_obj(s,l,c=None):
+    o=doc.addObject("Part::Feature",l); o.Shape=s
+    if c and Gui.getDocument(doc.Name): o.ViewObject.ShapeColor=c
+    return o
+
+def place_x(shape,L,cx=0,cy=0,cz=0):
+    s=shape.copy()
+    s.Placement=App.Placement(App.Vector(cx-L/2.0,cy,cz),rot_to_x())
+    return s
+
+def make_hollow(solid,t,l="Shell"):
+    try:
+        inner=solid.makeOffsetShape(-t,0.01,join=2,fill=True)
+        return add_obj(solid.cut(inner),l)
+    except:
+        return add_obj(solid,l+"_fallback")
+
+# ========================
+# Parámetros principales
+# ========================
+P = {
+    "nose_len": 600.0, "nose_base_d": 1400.0,
+    "mid_len": 2200.0, "mid_d": 2400.0,   # cuerpo más ancho
+    "rear_len": 1400.0, "rear_d": 2600.0,
+    "hull_t": 40.0,                       # blindaje externo
+    "inner_t": 20.0,                      # casco interno
+    "col_outer": (0.75,0.75,0.78),
+    "col_inner": (0.55,0.55,0.60)
+}
+
+# ========================
+# Geometría del cuerpo
+# ========================
+nose = place_x(Part.makeCone(P["nose_base_d"]/2,0,P["nose_len"]),P["nose_len"],cx=P["nose_len"]/2)
+mid  = place_x(Part.makeCylinder(P["mid_d"]/2,P["mid_len"]),P["mid_len"],cx=P["nose_len"]+P["mid_len"]/2)
+rear = place_x(Part.makeCone(P["rear_d"]/2,P["mid_d"]/2,P["rear_len"]),P["rear_len"],cx=P["nose_len"]+P["mid_len"]+P["rear_len"]/2)
+
+hull_solid = nose.fuse(mid).fuse(rear)
+
+# Blindaje externo
+hull_outer = make_hollow(hull_solid,P["hull_t"],l="Hull_Outer")
+hull_outer.ViewObject.ShapeColor = P["col_outer"]
+
+# Casco interno (volumen útil)
+hull_inner = make_hollow(hull_solid,P["inner_t"],l="Hull_Inner")
+hull_inner.ViewObject.ShapeColor = P["col_inner"]
+
+# ========================
+# Ensamblaje
+# ========================
+grp = doc.addObject("App::Part","NaveRobusta")
+for o in [hull_outer,hull_inner]:
+    grp.addObject(o)
+
+doc.recompute()
+try:
+    Gui.ActiveDocument.ActiveView.viewAxonometric()
+    Gui.SendMsgToActiveView("ViewFit")
+except: pass
+
+print("Nave robusta creada con casco interno y blindaje externo en '{}'".format(doc.Label))
