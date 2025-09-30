@@ -1,0 +1,262 @@
+# -*- coding:utf-8 -*-
+import FreeCAD as App, FreeCADGui as Gui, Part, Draft, math
+
+doc_name = "NaveConPropulsor"
+if App.ActiveDocument is None or App.ActiveDocument.Label != doc_name:
+    App.newDocument(doc_name)
+doc = App.ActiveDocument
+
+# ---- PARAMETROS CLAVE (ajusta aquí) ----
+P = {
+    # Cuerpo criostato y longitudes
+    "nose_len": 500.0,
+    "nose_base_d": 900.0,
+    "mid_len": 1800.0,
+    "mid_d": 1800.0,          # cuerpo medio
+    "rear_len": 1200.0,
+    "rear_d": 2000.0,         # cuerpo trasero
+    "hull_t": 15.0,           # espesor carcasa
+
+    # Reactor central
+    "reactor_d": 1500.0,
+    "reactor_l": 1600.0,
+    "reactor_cx": 2800.0,
+
+    # Anillos "cuánticos" (toros)
+    "ring_h": 40.0,
+    "ring_ro": 1000.0,
+    "ring_ri": 950.0,
+    "ring_n": 18,
+    "ring_pitch": 100.0,
+
+    # Bobinas tipo tokamak (toros)
+    "coil_rect_w": 100.0,
+    "coil_rect_h": 100.0,     # no usado en torus simple, reservado para perfil rectangular si se extruye
+    "coil_R": 1100.0,         # radio mayor toroidal
+    "coil_n": 12,
+    "coil_span": 1600.0,      # extensión a lo largo del eje X
+
+    # Barras/inyectores verticales
+    "bar_n": 12,
+    "bar_d": 20.0,
+
+    # Rejillas/estatores circulares
+    "grid_n": 24,
+    "grid_rows": 3,
+    "grid_w": 160.0,
+    "grid_h": 120.0,
+    "grid_t": 8.0,
+    "grid_r": 900.0,
+    "grid_span_l": 1400.0,
+
+    # Tobera integrada
+    "nozzle_inlet_d": 1400.0,   # diámetro en la unión con carcasa
+    "nozzle_throat_d": 800.0,   # diámetro garganta
+    "nozzle_exit_d": 1600.0,    # salida
+    "nozzle_l": 900.0,          # longitud total tobera
+    "nozzle_cx": None,          # si None, se alinea al final del rear
+}
+
+# ---- AUXILIARES GEO ----
+X_AXIS = App.Vector(1,0,0)
+Y_AXIS = App.Vector(0,1,0)
+Z_AXIS = App.Vector(0,0,1)
+
+def rot_to_x():
+    return App.Rotation(Y_AXIS, 90)
+
+def add_obj(shape, label, color=None):
+    obj = doc.addObject("Part::Feature", label)
+    obj.Shape = shape
+    if color and Gui.getDocument(doc.Name):
+        obj.ViewObject.ShapeColor = color
+    return obj
+
+def fuse_many(shapes):
+    shapes = [s for s in shapes if s is not None]
+    if not shapes:
+        return None
+    acc = shapes[0]
+    for s in shapes[1:]:
+        try:
+            acc = acc.fuse(s)
+        except Exception:
+            # fallback compound si hay fallos topológicos
+            acc = Part.makeCompound([acc, s])
+    return acc
+
+def make_cyl_x(d, L, cx=0, cy=0, cz=0):
+    r = d/2.0
+    c = Part.makeCylinder(r, L)
+    c.Placement = App.Placement(App.Vector(cx - L/2.0, cy, cz), rot_to_x())
+    return c
+
+def make_cone_x(d1, d2, L, cx=0, cy=0, cz=0):
+    r1, r2 = d1/2.0, d2/2.0
+    c = Part.makeCone(r1, r2, L)
+    c.Placement = App.Placement(App.Vector(cx - L/2.0, cy, cz), rot_to_x())
+    return c
+
+def make_torus_at_x(R, r, cx=0, cy=0, cz=0):
+    t = Part.makeTorus(R, r)
+    t.Placement = App.Placement(App.Vector(cx, cy, cz), rot_to_x())
+    return t
+
+def make_hollow_solid(solid, t):
+    try:
+        inner = solid.makeOffsetShape(-t, 0.01, join=2, fill=True)
+        return solid.cut(inner)
+    except Exception:
+        return solid  # fallback: sin hueco
+
+# ---- CARCASA CRIOSTATO (doble pared + bridas) ----
+nose = make_cone_x(P["nose_base_d"], 0, P["nose_len"], cx=P["nose_len"]/2.0)
+mid = make_cyl_x(P["mid_d"], P["mid_len"], cx=P["nose_len"] + P["mid_len"]/2.0)
+rear = make_cyl_x(P["rear_d"], P["rear_len"], cx=P["nose_len"] + P["mid_len"] + P["rear_len"]/2.0)
+
+hull_solid = fuse_many([nose, mid, rear])
+hull_shell = make_hollow_solid(hull_solid, P["hull_t"])
+hull_obj = add_obj(hull_shell, "Hull", color=(0.85,0.85,0.88))
+
+# Bridas (anillos) en extremos del hull
+flange_t = max(20.0, P["hull_t"]*1.5)
+flange_w = max(60.0, P["hull_t"]*4.0)
+nose_flange_x = P["nose_len"]
+rear_flange_x = P["nose_len"] + P["mid_len"] + P["rear_len"]
+
+nose_flange = make_cyl_x(P["nose_base_d"] + flange_w, flange_t, cx=nose_flange_x + flange_t/2.0)
+nose_flange = nose_flange.cut(make_cyl_x(P["nose_base_d"] - flange_w, flange_t, cx=nose_flange_x + flange_t/2.0))
+rear_flange = make_cyl_x(P["rear_d"] + flange_w, flange_t, cx=rear_flange_x - flange_t/2.0)
+rear_flange = rear_flange.cut(make_cyl_x(P["rear_d"] - flange_w, flange_t, cx=rear_flange_x - flange_t/2.0))
+flanges_obj = add_obj(fuse_many([nose_flange, rear_flange]), "Flanges", color=(0.75,0.75,0.78))
+
+# ---- REACTOR CENTRAL ----
+reactor = make_cyl_x(P["reactor_d"], P["reactor_l"], cx=P["reactor_cx"])
+reactor_obj = add_obj(reactor, "Reactor", color=(0.60,0.40,0.85))  # púrpura
+
+# ---- ANILLOS CUÁNTICOS ----
+rings = []
+x0 = P["reactor_cx"] - P["reactor_l"]/2.0 + P["ring_h"]/2.0
+R_mean = (P["ring_ro"] + P["ring_ri"])/2.0
+r_small = (P["ring_ro"] - P["ring_ri"])/2.0
+for i in range(P["ring_n"]):
+    x = x0 + i * P["ring_pitch"]
+    rings.append(make_torus_at_x(R_mean, r_small, cx=x))
+rings_obj = add_obj(fuse_many(rings), "Rings", color=(0.80,0.80,0.90))
+
+# ---- BOBINAS TOKAMAK ----
+coils = []
+cx0 = P["reactor_cx"] - P["coil_span"]/2.0
+pitch = P["coil_span"]/(max(1, P["coil_n"]-1))
+for i in range(P["coil_n"]):
+    cx = cx0 + i * pitch
+    coils.append(make_torus_at_x(P["coil_R"], P["coil_rect_w"]/2.0, cx=cx))
+coils_obj = add_obj(fuse_many(coils), "Coils", color=(0.20,0.55,0.90))
+
+# ---- BARRAS VERTICALES / INYECTORES ----
+bars = []
+bar_R = R_mean
+for i in range(P["bar_n"]):
+    ang = math.radians(i * (360.0 / P["bar_n"]))
+    y = bar_R * math.cos(ang)
+    z = bar_R * math.sin(ang)
+    b = Part.makeCylinder(P["bar_d"]/2.0, P["reactor_l"])
+    b.Placement = App.Placement(App.Vector(P["reactor_cx"] - P["reactor_l"]/2.0, y, z), rot_to_x())
+    bars.append(b)
+bars_obj = add_obj(fuse_many(bars), "Quantum_Bars", color=(0.70,0.70,0.72))
+
+# ---- REJILLAS ESTATOR CIRCULARES ----
+grids = []
+cx_start = P["reactor_cx"] - P["grid_span_l"]/2.0
+row_pitch = P["grid_span_l"]/max(1, (P["grid_rows"] - 1)) if P["grid_rows"] > 1 else 0.0
+
+for row in range(P["grid_rows"]):
+    cx = cx_start + row * row_pitch
+    for i in range(P["grid_n"]):
+        ang = math.radians(i * (360.0 / P["grid_n"]))
+        y = P["grid_r"] * math.cos(ang)
+        z = P["grid_r"] * math.sin(ang)
+        g = Part.makeBox(P["grid_w"], P["grid_t"], P["grid_h"])
+        g.Placement = App.Placement(
+            App.Vector(cx - P["grid_w"]/2.0, y - P["grid_t"]/2.0, z - P["grid_h"]/2.0),
+            App.Rotation()
+        )
+        grids.append(g)
+grids_obj = add_obj(fuse_many(grids), "Stator_Grids", color=(0.55,0.65,0.75))
+
+# ---- TOBERA INTEGRADA (convergente-divergente) ----
+if P["nozzle_cx"] is None:
+    P["nozzle_cx"] = rear_flange_x + flange_t/2.0 + P["nozzle_l"]/2.0
+
+# Modelo simple: cono convergente hasta garganta + cono divergente hasta salida
+L_conv = max(0.25*P["nozzle_l"], 0.1*P["nozzle_l"])
+L_div = P["nozzle_l"] - L_conv
+conv = make_cone_x(P["nozzle_inlet_d"], P["nozzle_throat_d"], L_conv, cx=P["nozzle_cx"] - P["nozzle_l"]/2.0 + L_conv/2.0)
+divg = make_cone_x(P["nozzle_throat_d"], P["nozzle_exit_d"], L_div, cx=P["nozzle_cx"] - P["nozzle_l"]/2.0 + L_conv + L_div/2.0)
+nozzle = fuse_many([conv, divg])
+nozzle_obj = add_obj(nozzle, "Nozzle", color=(0.80,0.75,0.70))
+
+# Unión estética de tobera con brida trasera (opcional corte interior)
+try:
+    rear_cut = make_cyl_x(P["nozzle_inlet_d"] - 2*P["hull_t"], flange_t, cx=rear_flange_x - flange_t/2.0)
+    flanges_shape = flanges_obj.Shape.cut(rear_cut)
+    flanges_obj.Shape = flanges_shape
+except Exception:
+    pass
+
+# ---- AGRUPACIÓN ----
+grp = doc.addObject("App::Part", "QuantumHydrogenMotor")
+for o in [hull_obj, flanges_obj, reactor_obj, rings_obj, coils_obj, bars_obj, grids_obj, nozzle_obj]:
+    if o:
+        grp.addObject(o)
+
+# Posiciona el propulsor tokamak auxiliar al lado (opcional)
+def build_tokamak_thruster():
+    p = {"R_boca":0.18,"t_liner":0.02,"R_i1":0.2,"R_i2":0.26,"R_m1":0.26,"R_m2":0.4,"R_e1":0.4,"R_e2":0.5,
+         "t_tapa":0.02,"n_tubos":6,"L_tubo":0.25,"Do_tubo":0.1,"t_tubo":0.005,"n_alabes":6,"t_alabe":0.006,
+         "area_alabe":0.12,"curvatura_deg":60.0,"n_riostras":12,"riostra_l":0.12,"riostra_a":0.05,
+         "riostra_e":0.02,"base_espesor":0.04}
+    def make_ring(R1,R2,H,z0=0):
+        return Part.makeCylinder(R2,H,App.Vector(0,0,z0)).cut(Part.makeCylinder(R1,H,App.Vector(0,0,z0)))
+    def place_at_radius(s,R,a,z0=0):
+        m = App.Matrix(); m.rotateZ(a*math.pi/180.0); m.move(App.Vector(R,0,z0)); return s.transformGeometry(m)
+    L = 0.7
+    liner = make_ring(p["R_boca"], p["R_boca"]+p["t_liner"], L)
+    anillo_i = make_ring(p["R_i1"], p["R_i2"], L)
+    anillo_m = make_ring(p["R_m1"], p["R_m2"], L)
+    anillo_e = make_ring(p["R_e1"], p["R_e2"], L)
+    tapa = make_ring(p["R_boca"], p["R_e2"], p["t_tapa"], L)
+    Rt_o, Rt_i, tubo_len = p["Do_tubo"]/2.0, p["Do_tubo"]/2.0 - p["t_tubo"], p["L_tubo"]
+    tubo0 = Part.makeCylinder(Rt_o, tubo_len, App.Vector(p["R_e2"], -tubo_len/2.0, (L-tubo_len)/2.0), App.Vector(0,1,0))
+    tubo0 = tubo0.cut(Part.makeCylinder(Rt_i, tubo_len, App.Vector(p["R_e2"], -tubo_len/2.0, (L-tubo_len)/2.0), App.Vector(0,1,0)))
+    tubos = [place_at_radius(tubo0, 0, 360.0*k/p["n_tubos"], 0) for k in range(p["n_tubos"])]
+    tubos_fuse = fuse_many(tubos)
+    altura_alabe = max(0.05, p["R_i2"] - p["R_boca"])
+    cuerda_aprox = max(0.05, p["area_alabe"]/altura_alabe)
+    alabe_profile = Part.makeBox(p["t_alabe"], cuerda_aprox, altura_alabe, App.Vector(p["R_boca"], -cuerda_aprox/2.0, (L-altura_alabe)/2.0))
+    alabes = [place_at_radius(alabe_profile, 0, 360.0*k/p["n_alabes"], 0) for k in range(p["n_alabes"])]
+    alabes_fuse = fuse_many(alabes)
+    rio = Part.makeBox(p["riostra_l"], p["riostra_e"], p["riostra_a"], App.Vector(p["R_m1"], -p["riostra_e"]/2.0, (L-p["riostra_a"])/2.0))
+    riostras = [place_at_radius(rio, 0, 360.0*k/p["n_riostras"], 0) for k in range(p["n_riostras"])]
+    riostras_fuse = fuse_many(riostras)
+    base = Part.makeBox(2*p["R_e2"], p["R_e2"], p["base_espesor"], App.Vector(-p["R_e2"], -p["R_e2"]/2.0, -p["base_espesor"]))
+    base = base.fuse(Part.makeCylinder(p["R_e2"]/2.0, p["base_espesor"], App.Vector(0,0,-p["base_espesor"])))
+    group = App.ActiveDocument.addObject("App::Part", "PropulsorTokamak")
+    for s, n, c in [(liner,"Liner",(0.85,0.85,0.85)), (anillo_i,"AnilloInterno",(0.80,0.80,0.80)),
+                    (anillo_m,"AnilloMedio",(0.78,0.78,0.78)), (anillo_e,"AnilloExterior",(0.76,0.76,0.76)),
+                    (tapa,"Tapa",(0.74,0.74,0.74)), (tubos_fuse,"Tuberias",(0.65,0.75,0.85)),
+                    (alabes_fuse,"Alabes",(0.70,0.70,0.72)), (riostras_fuse,"Riostras",(0.68,0.68,0.70)),
+                    (base,"Base",(0.80,0.78,0.76))]:
+        o = add_obj(s, n, color=c)
+        group.addObject(o)
+    return group
+
+prop = build_tokamak_thruster()
+prop.Placement.Base.x = P["nose_len"] + P["mid_len"] + P["rear_len"] + 150.0
+
+doc.recompute()
+try:
+    Gui.ActiveDocument.ActiveView.viewAxonometric()
+    Gui.SendMsgToActiveView("ViewFit")
+except Exception:
+    pass

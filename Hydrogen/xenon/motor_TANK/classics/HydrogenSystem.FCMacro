@@ -1,0 +1,262 @@
+# -*- coding:utf-8 -*-
+import FreeCAD as App, FreeCADGui as Gui, Part, math
+
+doc_name = "NaveCuanticaDelante"
+if App.ActiveDocument is None or App.ActiveDocument.Label != doc_name:
+    App.newDocument(doc_name)
+doc = App.ActiveDocument
+
+# -------------------------
+# Utilidades seguras
+# -------------------------
+def rot_to_x():  # orienta eje de longitud L a X
+    return App.Rotation(App.Vector(0,1,0), 90)
+
+def add_obj(shape, label, color=None):
+    o = doc.addObject("Part::Feature", label)
+    o.Shape = shape
+    try:
+        if color and Gui.getDocument(doc.Name):
+            o.ViewObject.ShapeColor = color
+    except Exception:
+        pass
+    return o
+
+def place_shape_x(shape, L, cx=0, cy=0, cz=0):
+    s = shape.copy()
+    s.Placement = App.Placement(App.Vector(cx - L/2.0, cy, cz), rot_to_x())
+    return s
+
+def fuse_many(shapes):
+    shapes = [s for s in shapes if s is not None]
+    if not shapes: return None
+    acc = shapes[0]
+    for s in shapes[1:]:
+        try:
+            acc = acc.fuse(s)
+        except Exception:
+            acc = Part.makeCompound([acc, s])
+    return acc
+
+def make_fillet_safe(shape, r):
+    if shape is None: return None
+    try:
+        return shape.makeFillet(r, shape.Edges)
+    except Exception:
+        # intento con subset de aristas (evita auto-intersecciones)
+        try:
+            edges = shape.Edges[::2]  # una de cada dos
+            return shape.makeFillet(r, edges)
+        except Exception:
+            return shape
+
+def transform_shape(shape, rot_deg=0.0, move_vec=App.Vector(0,0,0)):
+    m = App.Matrix()
+    if rot_deg != 0.0:
+        m.rotateZ(rot_deg*math.pi/180.0)
+    if move_vec != App.Vector(0,0,0):
+        m.move(move_vec)
+    return shape.transformGeometry(m)
+
+def polar_array(shape, n, radius, z=0):
+    res=[]
+    n = max(1, int(n))
+    for i in range(n):
+        ang = 360.0*i/n
+        m = App.Matrix(); m.rotateZ(ang*math.pi/180.0); m.move(App.Vector(radius,0,z))
+        res.append(shape.copy().transformGeometry(m))
+    return res
+
+def make_ring(R1, R2, H, z0=0):
+    outer = Part.makeCylinder(R2, H, App.Vector(0,0,z0))
+    inner = Part.makeCylinder(R1, H, App.Vector(0,0,z0))
+    return outer.cut(inner)
+
+# -------------------------
+# Cuerpo (cono + cilindros)
+# -------------------------
+P = {
+    "nose_len": 500.0, "nose_base_d": 900.0,
+    "mid_len": 1800.0, "mid_d": 1800.0,
+    "rear_len": 1200.0, "rear_d": 2000.0
+}
+
+nose_s = Part.makeCone(P["nose_base_d"]/2.0, 0, P["nose_len"])
+nose_s = place_shape_x(nose_s, P["nose_len"], cx=P["nose_len"]/2.0)
+
+mid_s  = Part.makeCylinder(P["mid_d"]/2.0, P["mid_len"])
+mid_s  = place_shape_x(mid_s, P["mid_len"], cx=P["nose_len"] + P["mid_len"]/2.0)
+
+rear_s = Part.makeCylinder(P["rear_d"]/2.0, P["rear_len"])
+rear_s = place_shape_x(rear_s, P["rear_len"], cx=P["nose_len"] + P["mid_len"] + P["rear_len"]/2.0)
+
+hull_solid = fuse_many([nose_s, mid_s, rear_s])
+hull_obj = add_obj(hull_solid, "Hull", (0.75,0.75,0.78))
+
+cuerpo_grp = doc.addObject("App::Part", "CuerpoNave")
+cuerpo_grp.addObject(hull_obj)
+
+# -------------------------
+# Propulsor Tokamak (compacto y robusto)
+# -------------------------
+PARAMS = {
+    "escala_compacto": 1.0,
+    "D_ext": 1.2, "L": 0.7,
+    "R_boca": 0.18, "t_liner": 0.02,
+    "R_i1": 0.2, "R_i2": 0.26,
+    "R_m1": 0.26, "R_m2": 0.4,
+    "phi": 0.25,  # factor angular de canal
+    "R_e1": 0.4, "R_e2": 0.5,
+    "t_tapa": 0.02,
+    "n_tubos": 6, "L_tubo": 0.25, "Do_tubo": 0.1, "t_tubo": 0.005,
+    "n_alabes": 6, "t_alabe": 0.006, "area_alabe": 0.12, "curvatura_deg": 60.0,
+    "n_riostras": 12, "riostra_l": 0.12, "riostra_a": 0.05, "riostra_e": 0.02,
+    "base_altura": 0.12, "base_espesor": 0.04,
+    "n_canales": 24, "canal_alto": 0.25, "canal_radio_frac": 0.6, "filete_radio": 0.008,
+    "materiales": {
+        "liner": ("Ti-6Al-4V", 4430),
+        "anillos": ("SS-316L", 8000),
+        "tapa": ("SS-316L", 8000),
+        "tuberias": ("SS-304", 7800),
+        "alabes": ("PEEK-CF", 1550),
+        "riostras": ("Ti-6Al-4V", 4430),
+        "base": ("S355", 7850)
+    }
+}
+COLORS = {
+    "liner": (0.55,0.8,1.0),
+    "anillos": (0.7,0.7,0.72),
+    "tapa": (0.65,0.65,0.68),
+    "tuberias": (0.55,0.8,1.0),
+    "alabes": (0.85,0.2,0.2),
+    "riostras": (0.2,0.65,0.3),
+    "base": (0.25,0.25,0.28)
+}
+
+def scaled(p):
+    s = p["escala_compacto"]
+    q = dict(p)
+    for k in ["D_ext","L","R_boca","t_liner","R_i1","R_i2","R_m1","R_m2","R_e1","R_e2","t_tapa",
+              "L_tubo","Do_tubo","t_tubo","riostra_l","riostra_a","riostra_e",
+              "base_altura","base_espesor","canal_alto","filete_radio"]:
+        q[k] = p[k]*s
+    return q
+
+def build_thruster_part(p_in):
+    p = scaled(p_in)
+    R_ext = p["D_ext"]/2.0; L = p["L"]
+
+    # Anillos y liner
+    liner   = make_ring(p["R_boca"], p["R_boca"]+p["t_liner"], L, 0)
+    anillo_i= make_ring(p["R_i1"], p["R_i2"], L, 0)
+    anillo_m_raw = make_ring(p["R_m1"], p["R_m2"], L, 0)
+
+    # Canales en anillo medio
+    zc = (L - p["canal_alto"]) / 2.0
+    depth = (p["R_m2"] - p["R_m1"]) * p["canal_radio_frac"]
+    # ancho angular relativo
+    canal_w = max(0.01 * p_in["escala_compacto"], 0.5 * (2*math.pi*p["R_m2"] / max(1, p["n_canales"])) * p["phi"])
+    canal_profile = Part.makeBox(depth, canal_w, p["canal_alto"], App.Vector(p["R_m1"], -canal_w/2.0, zc))
+    canales = polar_array(canal_profile, int(p["n_canales"]), 0.0, 0.0)
+    canales_fuse = fuse_many(canales)
+    anillo_m = anillo_m_raw.cut(canales_fuse) if canales_fuse else anillo_m_raw
+
+    anillo_e = make_ring(p["R_e1"], p["R_e2"], L, 0)
+    tapa     = make_ring(p["R_boca"], R_ext, p["t_tapa"], L)
+
+    # Tuberías radiales
+    Rt_o, Rt_i, tubo_len = p["Do_tubo"]/2.0, p["Do_tubo"]/2.0 - p["t_tubo"], p["L_tubo"]
+    tubo0 = Part.makeCylinder(Rt_o, tubo_len, App.Vector(p["R_e2"], -tubo_len/2.0, (L-tubo_len)/2.0), App.Vector(0,1,0))
+    tubo0 = tubo0.cut(Part.makeCylinder(Rt_i, tubo_len, App.Vector(p["R_e2"], -tubo_len/2.0, (L-tubo_len)/2.0), App.Vector(0,1,0)))
+    tubos = polar_array(tubo0, p["n_tubos"], 0.0, 0.0)
+    tubos_fuse = fuse_many(tubos)
+
+    # Álabes curvados (aprox por segmentos)
+    altura_alabe = max(0.05, p["R_i2"] - p["R_boca"])
+    cuerda_aprox = max(0.05, p_in["area_alabe"]/altura_alabe)
+    alabe_profile = Part.makeBox(p_in["t_alabe"], cuerda_aprox, altura_alabe,
+                                 App.Vector(p["R_boca"], -cuerda_aprox/2.0, (L-altura_alabe)/2.0))
+    nseg = 8; step = p_in["curvatura_deg"]/max(1, nseg)
+    slices = []
+    for i in range(nseg+1):
+        a_deg = (-p_in["curvatura_deg"]/2.0) + i*step
+        slices.append(transform_shape(alabe_profile, rot_deg=a_deg, move_vec=App.Vector(altura_alabe/2.0,0,0)))
+    alabe0 = fuse_many(slices)
+    alabes = polar_array(alabe0, p_in["n_alabes"], 0.0, 0.0)
+    alabes_fuse = fuse_many(alabes)
+
+    # Riostras
+    rio = Part.makeBox(p_in["riostra_l"], p_in["riostra_e"], p_in["riostra_a"],
+                       App.Vector(p["R_m1"], -p_in["riostra_e"]/2.0, (L - p_in["riostra_a"])/2.0))
+    riostras = polar_array(rio, p_in["n_riostras"], 0.0, 0.0)
+    riostras_fuse = fuse_many(riostras)
+
+    # Base
+    base = Part.makeBox(2*R_ext, R_ext, p_in["base_espesor"], App.Vector(-R_ext, -R_ext/2.0, -p_in["base_espesor"]))
+    base = base.fuse(Part.makeCylinder(R_ext/2.0, p_in["base_espesor"], App.Vector(0,0,-p_in["base_espesor"])))
+
+    # Filetes seguros
+    rf = p_in["filete_radio"]
+    liner_f    = make_fillet_safe(liner, rf)
+    anillo_i_f = make_fillet_safe(anillo_i, rf)
+    anillo_m_f = make_fillet_safe(anillo_m, rf)
+    anillo_e_f = make_fillet_safe(anillo_e, rf)
+    tapa_f     = make_fillet_safe(tapa, rf)
+    tubos_f    = make_fillet_safe(tubos_fuse, rf)
+    alabes_f   = make_fillet_safe(alabes_fuse, rf)
+    riostras_f = make_fillet_safe(riostras_fuse, rf)
+    base_f     = make_fillet_safe(base, rf)
+
+    # Part contenedor
+    thr_part = doc.addObject("App::Part", "PropulsorTokamak")
+    objs = [
+        add_obj(liner_f,"Liner",(0.55,0.8,1.0)),
+        add_obj(anillo_i_f,"AnilloInterno",(0.7,0.7,0.72)),
+        add_obj(anillo_m_f,"AnilloMedio",(0.7,0.7,0.72)),
+        add_obj(anillo_e_f,"AnilloExterior",(0.7,0.7,0.72)),
+        add_obj(tapa_f,"TapaSuperior",(0.65,0.65,0.68)),
+        add_obj(base_f,"Base",(0.25,0.25,0.28)),
+        add_obj(tubos_f,"Tuberias",(0.55,0.8,1.0)),
+        add_obj(alabes_f,"Alabes",(0.85,0.2,0.2)),
+        add_obj(riostras_f,"Riostras",(0.2,0.65,0.3))
+    ]
+    for o in objs:
+        thr_part.addObject(o)
+
+    # Materiales
+    mats = p_in["materiales"]
+    order = ["liner","anillos","anillos","anillos","tapa","base","tuberias","alabes","riostras"]
+    for i, o in enumerate(objs):
+        k = order[i] if i < len(order) else "anillos"
+        m = mats.get(k, ("Generic", 1000))
+        try:
+            o.addProperty("App::PropertyString","Material","Physics","Material name"); o.Material = m[0]
+            o.addProperty("App::PropertyFloat","Densidad","Physics","Density kg/m^3"); o.Densidad = float(m[1])
+        except Exception:
+            pass
+
+    return thr_part
+
+# -------------------------
+# Escalado paramétrico y colocación DELANTE
+# -------------------------
+# Ajusta la escala del propulsor al diámetro de la base del cono frontal
+scale_factor = P["nose_base_d"] / PARAMS["D_ext"]
+PARAMS["escala_compacto"] = PARAMS["escala_compacto"] * scale_factor
+
+thruster_part = build_thruster_part(PARAMS)
+
+# Orienta hacia +X (fuera) y coloca delante del cono
+thruster_part.Placement = App.Placement()
+thruster_part.Placement.Rotation = App.Rotation(App.Vector(0,1,0), 180)  # boca hacia +X
+# distancia delante: múltiplo de la longitud del propulsor escalado
+L_eff = PARAMS["L"] * PARAMS["escala_compacto"]
+offset = max(P["nose_len"], 0) + L_eff * 0.6  # ajustable
+thruster_part.Placement.Base = App.Vector(-offset, 0, 0)
+
+doc.recompute()
+try:
+    Gui.ActiveDocument.ActiveView.viewAxonometric()
+    Gui.SendMsgToActiveView("ViewFit")
+except Exception:
+    pass
