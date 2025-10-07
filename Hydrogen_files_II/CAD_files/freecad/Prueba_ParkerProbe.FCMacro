@@ -1,0 +1,123 @@
+# -*- coding:utf-8 -*-
+import FreeCAD as App, FreeCADGui as Gui, Part, math
+
+doc_name = "SolarParker_Cohete_Grande"
+if App.ActiveDocument is None or App.ActiveDocument.Label != doc_name:
+    App.newDocument(doc_name)
+doc = App.ActiveDocument
+
+# -------------------------
+# Parámetros globales
+# -------------------------
+P = {
+    # Cuerpo central y tanque principal
+    "tank_len": 4000.0, "tank_d": 2200.0, "hull_t": 20.0,
+    # Escudo térmico (TPS)
+    "tps_diam": 3500.0, "tps_thick": 60.0,
+    # Paneles solares
+    "solar_len": 2500.0, "solar_w": 800.0, "solar_t": 30.0,
+    # Cámara de combustión
+    "chamber_len": 1500.0, "chamber_d": 1200.0,
+    # Tobera tipo campana
+    "throat_d": 400.0, "exit_d": 2400.0, "nozzle_len": 2000.0,
+    "nozzle_mid_d": 1600.0, "nozzle_mid_x": 700.0,
+    # Aro de gimbal
+    "gimbal_ring_ro": 1400.0, "gimbal_ring_ri": 1320.0, "gimbal_ring_t": 40.0,
+    # Antenas/mástiles
+    "mast_len": 1500.0, "mast_d": 80.0,
+}
+
+# -------------------------
+# Utilidades
+# -------------------------
+X_AXIS = App.Vector(1,0,0); Y_AXIS = App.Vector(0,1,0); Z_AXIS = App.Vector(0,0,1)
+def rot_to_x(): return App.Rotation(Y_AXIS, 90)
+def add_obj(shape, name):
+    o = doc.addObject("Part::Feature", name); o.Shape = shape; return o
+def color(o, rgb):
+    try: o.ViewObject.ShapeColor = rgb
+    except: pass
+def cyl_x(d, L, cx=0, cy=0, cz=0):
+    s = Part.makeCylinder(d/2.0, L)
+    s.Placement = App.Placement(App.Vector(cx - L/2.0, cy, cz), rot_to_x())
+    return s
+def cone_x(d1, d2, L, cx=0, cy=0, cz=0):
+    s = Part.makeCone(d1/2.0, d2/2.0, L)
+    s.Placement = App.Placement(App.Vector(cx - L/2.0, cy, cz), rot_to_x())
+    return s
+def circle_wire(d, cx, cy=0, cz=0):
+    circle = Part.Circle(App.Vector(cx, cy, cz), App.Vector(1,0,0), d/2.0)
+    return circle.toShape()
+
+# -------------------------
+# Tanque principal
+# -------------------------
+tank_cx = 0.0
+tank = cyl_x(P["tank_d"], P["tank_len"], cx=tank_cx)
+tank_obj = add_obj(tank,"Tank"); color(tank_obj,(0.2,0.6,1.0))
+
+# -------------------------
+# Escudo térmico (TPS frontal)
+# -------------------------
+tps = cyl_x(P["tps_diam"], P["tps_thick"], cx=tank_cx + P["tank_len"]/2.0 + P["tps_thick"]/2.0)
+tps_obj = add_obj(tps,"TPS"); color(tps_obj,(0.1,0.1,0.1))
+
+# -------------------------
+# Cámara de combustión
+# -------------------------
+chamber_cx = tank_cx - P["tank_len"]/2.0 - P["chamber_len"]/2.0
+chamber = cyl_x(P["chamber_d"], P["chamber_len"], cx=chamber_cx)
+chamber_obj = add_obj(chamber,"Chamber"); color(chamber_obj,(0.7,0.7,0.6))
+
+# -------------------------
+# Tobera
+# -------------------------
+throat_cx = chamber_cx - P["chamber_len"]/2.0
+exit_cx   = throat_cx - P["nozzle_len"]
+w_throat = circle_wire(P["throat_d"], throat_cx)
+w_mid    = circle_wire(P["nozzle_mid_d"], throat_cx - P["nozzle_mid_x"])
+w_exit   = circle_wire(P["exit_d"], exit_cx)
+loft = Part.makeLoft([w_throat, w_mid, w_exit], True)
+nozzle_obj = add_obj(loft,"Nozzle"); color(nozzle_obj,(0.6,0.6,0.6))
+
+# -------------------------
+# Paneles solares laterales
+# -------------------------
+solar1 = Part.makeBox(P["solar_len"], P["solar_w"], P["solar_t"])
+solar1.translate(App.Vector(P["tank_d"]/2.0+50.0, -P["solar_w"]/2, 500.0))
+solar1_obj = add_obj(solar1,"Solar1"); color(solar1_obj,(0.9,0.7,0.2))
+
+solar2 = Part.makeBox(P["solar_len"], P["solar_w"], P["solar_t"])
+solar2.translate(App.Vector(-P["tank_d"]/2.0-P["solar_len"]-50.0, -P["solar_w"]/2, 500.0))
+solar2_obj = add_obj(solar2,"Solar2"); color(solar2_obj,(0.9,0.7,0.2))
+
+# -------------------------
+# Aro de gimbal
+# -------------------------
+ring_cx = chamber_cx + P["chamber_len"]/2.0
+ring_outer = Part.makeTorus(P["gimbal_ring_ro"], P["gimbal_ring_t"]/2.0)
+ring_outer.Placement = App.Placement(App.Vector(ring_cx,0,0), rot_to_x())
+ring_inner = Part.makeTorus(P["gimbal_ring_ri"], P["gimbal_ring_t"]/2.0)
+ring_inner.Placement = App.Placement(App.Vector(ring_cx,0,0), rot_to_x())
+gimbal_ring = ring_outer.cut(ring_inner)
+gimbal_obj = add_obj(gimbal_ring,"Gimbal"); color(gimbal_obj,(0.5,0.5,0.5))
+
+# -------------------------
+# Antenas / mástiles científicos
+# -------------------------
+mast1 = cyl_x(P["mast_d"], P["mast_len"], cx=tank_cx+P["tank_len"]/4.0, cy=P["tank_d"]/2.0+200.0)
+mast2 = cyl_x(P["mast_d"], P["mast_len"], cx=tank_cx+P["tank_len"]/4.0, cy=-P["tank_d"]/2.0-200.0)
+mast_obj = add_obj(mast1.fuse(mast2),"Masts"); color(mast_obj,(0.8,0.8,0.9))
+
+# -------------------------
+# Agrupar
+# -------------------------
+grp = doc.addObject("App::Part","SolarParkerRocket")
+for o in [tank_obj,tps_obj,chamber_obj,nozzle_obj,solar1_obj,solar2_obj,gimbal_obj,mast_obj]:
+    grp.addObject(o)
+
+doc.recompute()
+try:
+    Gui.ActiveDocument.ActiveView.viewAxonometric()
+    Gui.SendMsgToActiveView("ViewFit")
+except: pass

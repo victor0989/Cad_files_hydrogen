@@ -1,0 +1,309 @@
+# -*- coding:utf-8 -*-
+import FreeCAD as App, FreeCADGui as Gui, Part, math
+
+doc_name = "Functional_Bus_Engine"
+if App.ActiveDocument is None or App.ActiveDocument.Label != doc_name:
+    App.newDocument(doc_name)
+doc = App.ActiveDocument
+
+# -------------------------
+# Parámetros
+# -------------------------
+P = {
+    "stage_len": 3600.0, "stage_d": 1600.0, "stage_t": 14.0,
+    "tank_len": 1200.0, "tank_d": 1400.0, "wall_t": 12.0,
+    "bus12_w": 226.0, "bus12_t": 226.0, "bus12_h": 340.0,
+    "bus24_w": 226.0, "bus24_t": 226.0, "bus24_h": 680.0,
+    "use_24U": True,  # cambia a False para 12U
+    "chamber_len": 800.0, "chamber_d": 600.0, "hull_t": 10.0,
+    "throat_d": 240.0, "exit_d": 900.0, "nozzle_len": 900.0,
+    "nozzle_mid_d": 560.0, "nozzle_mid_x": 320.0,
+    "assembly_cx": 0.0
+}
+
+# -------------------------
+# Utilidades
+# -------------------------
+X_AXIS=App.Vector(1,0,0); Y_AXIS=App.Vector(0,1,0)
+def rot_to_x(): return App.Rotation(Y_AXIS,90)
+def add_obj(shape,name): o=doc.addObject("Part::Feature",name); o.Shape=shape; return o
+def color(o,rgb): 
+    try: o.ViewObject.ShapeColor=rgb
+    except: pass
+
+def cyl_x(d,L,cx=0,cy=0,cz=0):
+    s=Part.makeCylinder(d/2.0,L)
+    s.Placement=App.Placement(App.Vector(cx-L/2.0,cy,cz),rot_to_x()); return s
+
+def circle_wire(d, cx, cy=0, cz=0):
+    c=Part.Circle(App.Vector(cx,cy,cz),App.Vector(1,0,0),d/2.0)
+    return c.toShape()
+
+# -------------------------
+# Fuselaje
+# -------------------------
+stage_cx=P["assembly_cx"]
+st_outer=cyl_x(P["stage_d"],P["stage_len"],cx=stage_cx)
+st_inner=cyl_x(P["stage_d"]-2*P["stage_t"],P["stage_len"],cx=stage_cx)
+stage_shell=st_outer.cut(st_inner)
+stage_obj=add_obj(stage_shell,"Stage_Structure"); color(stage_obj,(0.15,0.15,0.18))
+
+# -------------------------
+# Tanque con propelente
+# -------------------------
+tank_cx=stage_cx
+tank_outer=cyl_x(P["tank_d"],P["tank_len"],cx=tank_cx)
+tank_inner=cyl_x(P["tank_d"]-2*P["wall_t"],P["tank_len"],cx=tank_cx)
+tank_shell=tank_outer.cut(tank_inner)
+tank_prop=tank_inner
+
+tank_shell_obj=add_obj(tank_shell,"Tank_Structure"); color(tank_shell_obj,(0.2,0.5,0.9))
+tank_prop_obj=add_obj(tank_prop,"Tank_Propellant"); color(tank_prop_obj,(0.0,0.8,0.4))
+
+# -------------------------
+# Bus satelital 12U/24U
+# -------------------------
+bus_w = P["bus24_w"] if P["use_24U"] else P["bus12_w"]
+bus_t = P["bus24_t"] if P["use_24U"] else P["bus12_t"]
+bus_h = P["bus24_h"] if P["use_24U"] else P["bus12_h"]
+
+bus_cx = stage_cx - 600.0
+bus_frame = Part.makeBox(bus_w,bus_t,bus_h)
+bus_frame.Placement=App.Placement(App.Vector(bus_cx-bus_w/2.0,-bus_t/2.0,-bus_h/2.0),rot_to_x())
+bus_obj=add_obj(bus_frame,"Bus_Frame"); color(bus_obj,(0.25,0.35,0.55))
+
+# Bandejas internas (EPS, payload)
+tray1=Part.makeBox(bus_w-20,bus_t-20,20)
+tray1.Placement=App.Placement(App.Vector(bus_cx-bus_w/2.0+10,-(bus_t-20)/2.0,-10),rot_to_x())
+tray2=tray1.copy(); tray2.translate(App.Vector(0,0,bus_h/2.0))
+trays=tray1.fuse(tray2)
+trays_obj=add_obj(trays,"Bus_Trays"); color(trays_obj,(0.1,0.1,0.1))
+
+# -------------------------
+# Cámara y tobera sólidas
+# -------------------------
+ch_cx=stage_cx+P["stage_len"]/2.0-500.0
+ch_outer=cyl_x(P["chamber_d"],P["chamber_len"],cx=ch_cx)
+ch_inner=cyl_x(P["chamber_d"]-2*P["hull_t"],P["chamber_len"],cx=ch_cx)
+ch_wall=ch_outer.cut(ch_inner)
+ch_gas=ch_inner
+
+ch_wall_obj=add_obj(ch_wall,"Chamber_Wall"); color(ch_wall_obj,(0.85,0.75,0.65))
+ch_gas_obj=add_obj(ch_gas,"Chamber_Gas"); color(ch_gas_obj,(0.9,0.3,0.3))
+
+# Tobera con espesor
+throat_cx=ch_cx+P["chamber_len"]/2.0+20.0
+exit_cx=throat_cx+P["nozzle_len"]
+
+w_throat=circle_wire(P["throat_d"],throat_cx)
+w_mid=circle_wire(P["nozzle_mid_d"],throat_cx+P["nozzle_mid_x"])
+w_exit=circle_wire(P["exit_d"],exit_cx)
+
+noz_outer=Part.makeLoft([w_throat,w_mid,w_exit],True)
+w_throat_in=circle_wire(P["throat_d"]-2*P["hull_t"],throat_cx)
+w_mid_in=circle_wire(P["nozzle_mid_d"]-2*P["hull_t"],throat_cx+P["nozzle_mid_x"])
+w_exit_in=circle_wire(P["exit_d"]-2*P["hull_t"],exit_cx)
+noz_inner=Part.makeLoft([w_throat_in,w_mid_in,w_exit_in],True)
+
+noz_wall=noz_outer.cut(noz_inner)
+noz_gas=noz_inner
+
+noz_wall_obj=add_obj(noz_wall,"Nozzle_Wall"); color(noz_wall_obj,(0.7,0.7,0.7))
+noz_gas_obj=add_obj(noz_gas,"Nozzle_Gas"); color(noz_gas_obj,(0.9,0.4,0.4))
+
+# -------------------------
+# Agrupar
+# -------------------------
+grp=doc.addObject("App::Part","FunctionalEngine")
+for o in [stage_obj,tank_shell_obj,tank_prop_obj,bus_obj,trays_obj,
+          ch_wall_obj,ch_gas_obj,noz_wall_obj,noz_gas_obj]:
+    grp.addObject(o)
+
+doc.recompute()
+try:
+    Gui.ActiveDocument.ActiveView.viewAxonometric()
+    Gui.SendMsgToActiveView("ViewFit")
+except: pass
+
+# -------------------------
+# Reporte de volúmenes
+# -------------------------
+def vol_m3(shape): return shape.Volume/1e9
+print("Vol Tank propellant (m^3):", vol_m3(tank_prop_obj.Shape))
+print("Vol Chamber gas (m^3):", vol_m3(ch_gas_obj.Shape))
+print("Vol Nozzle gas (m^3):", vol_m3(noz_gas_obj.Shape))
+
+# -------------------------
+# Densidades y masas aproximadas por subsistema
+# -------------------------
+def mass_kg(shape, density): 
+    return vol_m3(shape) * density
+
+dens = {
+    "Al7075": 2810.0,   # fuselaje, estructuras del bus
+    "Ti64":   4420.0,   # cámara y tobera
+    "NH3_liq": 682.0,   # amoniaco líquido (aprox a ~1 bar, -33 °C)
+    "LiIon":   250.0,   # densidad volumétrica de paquetes batería (celdas + housing)
+    "PCB":    1850.0    # aviónica (placas + carcasa aprox)
+}
+
+m_stage_struct  = mass_kg(stage_obj.Shape,      dens["Al7075"])
+m_tank_struct   = mass_kg(tank_shell_obj.Shape, dens["Al7075"])
+m_tank_prop     = mass_kg(tank_prop_obj.Shape,  dens["NH3_liq"])
+m_bus_frame     = mass_kg(bus_obj.Shape,        dens["Al7075"])
+m_bus_trays     = mass_kg(trays_obj.Shape,      dens["LiIon"])
+m_chamber_wall  = mass_kg(ch_wall_obj.Shape,    dens["Ti64"])
+m_nozzle_wall   = mass_kg(noz_wall_obj.Shape,   dens["Ti64"])
+
+print("\n--- Presupuesto de masa aproximado ---")
+print("Fuselaje/Stage (Al7075):          %.1f kg" % m_stage_struct)
+print("Tanque estructura (Al7075):       %.1f kg" % m_tank_struct)
+print("Tanque propelente (NH3 líquido):  %.1f kg" % m_tank_prop)
+print("Bus frame (Al7075):               %.1f kg" % m_bus_frame)
+print("Bandejas EPS/Payload (Li-Ion):    %.1f kg" % m_bus_trays)
+print("Cámara pared (Ti64):              %.1f kg" % m_chamber_wall)
+print("Tobera pared (Ti64):              %.1f kg" % m_nozzle_wall)
+
+m_struct_total = (m_stage_struct + m_tank_struct + m_bus_frame +
+                  m_bus_trays + m_chamber_wall + m_nozzle_wall)
+m_total_with_prop = m_struct_total + m_tank_prop
+
+print("--------------------------------------")
+print("Masa estructural total:            %.1f kg" % m_struct_total)
+print("Masa total con propelente:         %.1f kg" % m_total_with_prop)
+print("Propellant mass fraction (PMF):    %.3f" % (m_tank_prop / m_total_with_prop))
+
+# -------------------------
+# Centros de masa (eje X) para chequeo de CG
+# -------------------------
+def com_x(shape): 
+    try: return shape.CenterOfMass.x
+    except: return None
+
+coms = {
+    "Stage":        com_x(stage_obj.Shape),
+    "Tank_struct":  com_x(tank_shell_obj.Shape),
+    "Tank_prop":    com_x(tank_prop_obj.Shape),
+    "Bus_frame":    com_x(bus_obj.Shape),
+    "Bus_trays":    com_x(trays_obj.Shape),
+    "Chamber":      com_x(ch_wall_obj.Shape),
+    "Nozzle":       com_x(noz_wall_obj.Shape),
+}
+
+print("\n--- Centros de masa (X, mm) ---")
+for k,v in coms.items():
+    print("%-12s: %s" % (k, "None" if v is None else "%.1f" % v))
+
+# Centro de masa combinado (aprox) en X
+def combined_com_x(parts):
+    tot_mass = sum(m for (_,m,_) in parts)
+    if tot_mass <= 0: return None
+    return sum(m * com_x(s.Shape) for (s,m,_) in parts if com_x(s.Shape) is not None) / tot_mass
+
+parts_struct = [
+    (stage_obj,      m_stage_struct,  "Stage"),
+    (tank_shell_obj, m_tank_struct,   "Tank_struct"),
+    (bus_obj,        m_bus_frame,     "Bus_frame"),
+    (trays_obj,      m_bus_trays,     "Bus_trays"),
+    (ch_wall_obj,    m_chamber_wall,  "Chamber"),
+    (noz_wall_obj,   m_nozzle_wall,   "Nozzle"),
+]
+parts_with_prop = parts_struct + [(tank_prop_obj, m_tank_prop, "Tank_prop")]
+
+com_struct_x    = combined_com_x(parts_struct)
+com_full_x      = combined_com_x(parts_with_prop)
+
+print("\nCG estructural (X, mm):           %s" % ("None" if com_struct_x is None else "%.1f" % com_struct_x))
+print("CG con propelente (X, mm):        %s" % ("None" if com_full_x is None else "%.1f" % com_full_x))
+
+# -------------------------
+# Estabilidad y márgenes
+# -------------------------
+# Distancia entre CG y tobera (momento de palanca para control)
+if com_full_x is not None:
+    nozzle_exit_x = exit_cx
+    lever_arm = nozzle_exit_x - com_full_x
+    print("\nDistancia CG -> plano de tobera (mm): %.1f" % lever_arm)
+    if lever_arm > 0:
+        print("✔ El CG está por delante de la tobera, condición estable para control vectorial.")
+    else:
+        print("⚠ El CG está detrás de la tobera, revisar distribución de masas.")
+
+# Relación masa propelente / masa estructural
+if m_struct_total > 0:
+    pmf = m_tank_prop / (m_struct_total + m_tank_prop)
+    print("Propellant Mass Fraction (PMF): %.3f" % pmf)
+    if pmf > 0.85:
+        print("✔ PMF alto, buen rendimiento teórico.")
+    elif pmf > 0.70:
+        print("⚠ PMF moderado, viable pero menos eficiente.")
+    else:
+        print("❌ PMF bajo, revisar diseño de tanques y estructura.")
+
+# -------------------------
+# Reporte resumido
+# -------------------------
+print("\n===== RESUMEN DEL MODELO =====")
+print("Formato bus: %s" % ("24U" if P["use_24U"] else "12U"))
+print("Dimensiones bus (mm): W=%d, T=%d, H=%d" % (bus_w, bus_t, bus_h))
+print("Masa estructural total (kg): %.1f" % m_struct_total)
+print("Masa total con propelente (kg): %.1f" % m_total_with_prop)
+print("Centro de gravedad estructural (X, mm): %.1f" % com_struct_x)
+print("Centro de gravedad con propelente (X, mm): %.1f" % com_full_x)
+print("================================")
+
+# -------------------------
+# Tabla y export rápido (CSV en consola)
+# -------------------------
+def vol_m3(shape): return shape.Volume/1e9
+
+subs = [
+    ("Stage_Structure",  stage_obj,      m_stage_struct,  vol_m3(stage_obj.Shape),      com_struct_x),
+    ("Tank_Structure",   tank_shell_obj, m_tank_struct,   vol_m3(tank_shell_obj.Shape), com_x(tank_shell_obj.Shape)),
+    ("Tank_Propellant",  tank_prop_obj,  m_tank_prop,     vol_m3(tank_prop_obj.Shape),  com_x(tank_prop_obj.Shape)),
+    ("Bus_Frame",        bus_obj,        m_bus_frame,     vol_m3(bus_obj.Shape),        com_x(bus_obj.Shape)),
+    ("Bus_Trays",        trays_obj,      m_bus_trays,     vol_m3(trays_obj.Shape),      com_x(trays_obj.Shape)),
+    ("Chamber_Wall",     ch_wall_obj,    m_chamber_wall,  vol_m3(ch_wall_obj.Shape),    com_x(ch_wall_obj.Shape)),
+    ("Nozzle_Wall",      noz_wall_obj,   m_nozzle_wall,   vol_m3(noz_wall_obj.Shape),   com_x(noz_wall_obj.Shape)),
+]
+
+print("\nname,volume_m3,mass_kg,com_x_mm")
+for name, obj, mass, vol, cx in subs:
+    cx_str = "None" if cx is None else "%.3f" % cx
+    print("%s,%.6f,%.3f,%s" % (name, vol, mass, cx_str))
+
+# -------------------------
+# Chequeos geométricos básicos
+# -------------------------
+bb_stage = stage_obj.Shape.BoundBox
+bb_bus   = bus_obj.Shape.BoundBox
+
+# Holgura radial bus-fuselaje (aprox)
+stage_radius = P["stage_d"]/2.0 - P["stage_t"]
+bus_half_diag = ( (P["use_24U"] and P["bus24_t"] or P["bus12_t"]) / 2.0 )
+clearance_rad = stage_radius - bus_half_diag
+print("\nHolgura radial bus-fuselaje (mm): %.1f" % clearance_rad)
+
+# -------------------------
+# Vistas ortográficas (TechDraw) si disponible
+# -------------------------
+try:
+    page = doc.addObject("TechDraw::DrawPage", "TD_Page")
+    view = doc.addObject("TechDraw::DrawViewPart", "TD_View")
+    view.Source = grp
+    view.Scale = 0.15
+    # Direcciones ortográficas típicas
+    # X+: longitudinal, Y+/Z+ laterales
+    page.addView(view)
+    doc.recompute()
+    print("TechDraw: página y vista ortográfica creadas.")
+except Exception as e:
+    print("TechDraw no disponible o falló la creación de la página:", e)
+
+# -------------------------
+# Etiquetado visual (colores ya asignados) y cierre
+# -------------------------
+print("Modelo funcional generado: estructura y volúmenes internos separados por subsistema.")
+
+
+

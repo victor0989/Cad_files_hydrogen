@@ -1,0 +1,138 @@
+# -*- coding:utf-8 -*-
+import FreeCAD as App, FreeCADGui as Gui, Part, math
+
+doc_name = "Green_Ammonia_Motor_Shielded"
+if App.ActiveDocument is None or App.ActiveDocument.Label != doc_name:
+    App.newDocument(doc_name)
+doc = App.ActiveDocument
+
+# -------------------------
+# Parámetros extendidos (robustez + blindaje)
+# -------------------------
+P = {
+    # Tanque NH3
+    "tank_len": 2200.0, "tank_d": 1300.0, "hull_t": 14.0,
+    # Blindaje externo
+    "armor_t": 25.0,
+    # Bridas y puertos
+    "flange_d": 240.0, "flange_t": 20.0, "port_d": 140.0, "port_l": 160.0,
+    # Presurización
+    "press_sphere_d": 480.0, "press_line_d": 45.0,
+    # Líneas redundantes
+    "feed_line_d": 90.0, "feed_line2_d": 70.0,
+    "purge_line_d": 55.0, "relief_line_d": 65.0,
+    # Válvulas
+    "valve_body_d": 170.0, "valve_body_l": 240.0, "valve_handwheel_d": 130.0,
+    # Cámara y reactor
+    "chamber_len": 950.0, "chamber_d": 750.0,
+    "reactor_len": 550.0, "reactor_d": 520.0,
+    "injector_plate_t": 22.0, "injector_throat_d": 300.0,
+    "injector_holes_n": 28, "injector_hole_d": 12.0, "injector_pitch": 180.0,
+    # Camisa de refrigeración
+    "jacket_gap": 14.0, "jacket_inlet_d": 55.0, "jacket_outlet_d": 55.0,
+    # Tobera extendida
+    "throat_d": 300.0, "exit_d": 950.0, "nozzle_len": 850.0,
+    "nozzle_mid_d": 620.0, "nozzle_mid_x": 320.0,
+    "nozzle_ext_len": 600.0, "nozzle_ext_factor": 1.3,
+    # Estructura
+    "gimbal_ring_ro": 800.0, "gimbal_ring_ri": 730.0, "gimbal_ring_t": 28.0,
+    "lug_w": 130.0, "lug_t": 32.0, "lug_h": 180.0, "lug_n": 4,
+    "strut_d": 55.0, "strut_len": 700.0,
+    # Refuerzos
+    "stiffener_t": 16.0, "stiffener_w": 120.0, "stiffener_n": 6,
+    # Sensores
+    "boss_d": 65.0, "boss_h": 40.0, "boss_n": 8,
+    # Paneles de inspección
+    "hatch_d": 260.0, "hatch_t": 18.0, "hatch_n": 3,
+    # Adaptador superior
+    "adapter_len": 520.0, "adapter_extra": 350.0,
+    # Carcasa externa de cámara+tobera
+    "shield_gap": 80.0, "shield_t": 22.0,
+    # Colocación (eje X como largo)
+    "assembly_offset_x": 0.0
+}
+
+# -------------------------
+# Utilidades
+# -------------------------
+X_AXIS = App.Vector(1,0,0); Y_AXIS = App.Vector(0,1,0); Z_AXIS = App.Vector(0,0,1)
+def rot_to_x(): return App.Rotation(Y_AXIS, 90)
+def add_obj(shape, name):
+    o = doc.addObject("Part::Feature", name); o.Shape = shape; return o
+def color(o, rgb): 
+    try: o.ViewObject.ShapeColor = rgb
+    except: pass
+
+def cyl_x(d, L, cx=0, cy=0, cz=0):
+    s = Part.makeCylinder(d/2.0, L)
+    s.Placement = App.Placement(App.Vector(cx - L/2.0, cy, cz), rot_to_x())
+    return s
+
+def cone_x(d1, d2, L, cx=0, cy=0, cz=0):
+    s = Part.makeCone(d1/2.0, d2/2.0, L)
+    s.Placement = App.Placement(App.Vector(cx - L/2.0, cy, cz), rot_to_x())
+    return s
+
+def sphere(cx, cy, cz, d):
+    return Part.makeSphere(d/2.0, App.Vector(cx, cy, cz))
+
+def circle_wire(d, cx, cy=0, cz=0):
+    circle = Part.Circle(App.Vector(cx, cy, cz), App.Vector(1,0,0), d/2.0)
+    return circle.toShape()
+
+# -------------------------
+# Blindaje externo del tanque
+# -------------------------
+R = P["tank_d"]/2.0; t = P["hull_t"]; armor = P["armor_t"]
+tank_cx = P["assembly_offset_x"]
+
+# Casco principal
+tank_wall = cyl_x(P["tank_d"], P["tank_len"], cx=tank_cx)
+tank_inner = cyl_x(P["tank_d"]-2*t, P["tank_len"], cx=tank_cx)
+tank_shell = tank_wall.cut(tank_inner)
+
+# Blindaje adicional
+armor_outer = cyl_x(P["tank_d"]+2*armor, P["tank_len"]+armor*0.8, cx=tank_cx)
+armor_inner = cyl_x(P["tank_d"], P["tank_len"]+armor*0.8, cx=tank_cx)
+armor_shell = armor_outer.cut(armor_inner)
+
+tank_total = tank_shell.fuse(armor_shell)
+tank_obj = add_obj(tank_total,"NH3_Tank_Armored"); color(tank_obj,(0.2,0.6,0.8))
+
+# -------------------------
+# Refuerzos longitudinales (stiffeners)
+# -------------------------
+for i in range(P["stiffener_n"]):
+    ang = 360.0 * i / P["stiffener_n"]
+    y = (P["tank_d"]/2.0+armor/2.0)*math.cos(math.radians(ang))
+    z = (P["tank_d"]/2.0+armor/2.0)*math.sin(math.radians(ang))
+    stiff = cyl_x(P["stiffener_w"], P["stiffener_t"], cx=tank_cx, cy=y, cz=z)
+    stiff_obj = add_obj(stiff,f"Stiffener_{i+1}"); color(stiff_obj,(0.5,0.5,0.5))
+
+# -------------------------
+# Paneles de inspección
+# -------------------------
+for i in range(P["hatch_n"]):
+    ang = 120*i
+    y = (P["tank_d"]/2.0+armor/2.0)*math.cos(math.radians(ang))
+    z = (P["tank_d"]/2.0+armor/2.0)*math.sin(math.radians(ang))
+    hatch = cyl_x(P["hatch_d"], P["hatch_t"], cx=tank_cx+200.0, cy=y, cz=z)
+    hatch_obj = add_obj(hatch,f"Hatch_{i+1}"); color(hatch_obj,(0.3,0.3,0.3))
+
+# -------------------------
+# Carcasa externa cámara+tobera
+# -------------------------
+shield_outer = cyl_x(P["chamber_d"]+P["shield_gap"], P["chamber_len"]+P["nozzle_len"], cx=tank_cx+P["tank_len"]/2.0+650.0)
+shield_inner = cyl_x(P["chamber_d"], P["chamber_len"]+P["nozzle_len"], cx=tank_cx+P["tank_len"]/2.0+650.0)
+shield = shield_outer.cut(shield_inner)
+shield_obj = add_obj(shield,"Chamber_Shield"); color(shield_obj,(0.4,0.4,0.45))
+
+# -------------------------
+# (El resto: cámara, reactor, inyector, tobera, válvulas, sensores, gimbal, igual a tu base)
+# -------------------------
+
+doc.recompute()
+try:
+    Gui.ActiveDocument.ActiveView.viewAxonometric()
+    Gui.SendMsgToActiveView("ViewFit")
+except: pass

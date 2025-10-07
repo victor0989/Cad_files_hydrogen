@@ -1,0 +1,74 @@
+# -*- coding:utf-8 -*-
+import FreeCAD as App, FreeCADGui as Gui, Part, math
+
+doc_name = "SolarParker_Compact_Rocket"
+if App.ActiveDocument is None or App.ActiveDocument.Label != doc_name:
+    App.newDocument(doc_name)
+doc = App.ActiveDocument
+
+# -------------------------
+# Parámetros del conjunto
+# -------------------------
+P = {
+    "body_diam": 120.0,       # diámetro del cuerpo central
+    "body_len": 250.0,        # longitud total
+    "tps_diam": 180.0,        # diámetro del escudo TPS
+    "tps_thick": 15.0,        # grosor del escudo TPS
+    "nozzle_len": 80.0,       # longitud de la boquilla trasera
+    "nozzle_exit": 90.0,      # diámetro de salida
+    "solar_len": 120.0,       # longitud de paneles solares
+    "solar_w": 30.0,          # ancho de paneles solares
+    "solar_t": 2.0,           # grosor paneles
+    "ring_ro": 90.0,          # radio exterior anillo
+    "ring_t": 6.0             # grosor anillo soporte
+}
+
+# -------------------------
+# Funciones utilitarias
+# -------------------------
+def add_obj(shape,label):
+    obj=doc.addObject("Part::Feature",label)
+    obj.Shape=shape
+    return obj
+
+# -------------------------
+# Cuerpo principal
+# -------------------------
+body = Part.makeCylinder(P["body_diam"]/2, P["body_len"])
+body = body.translate(App.Vector(0,0,0))
+add_obj(body,"Cuerpo")
+
+# -------------------------
+# Escudo térmico (TPS)
+# -------------------------
+tps = Part.makeCylinder(P["tps_diam"]/2, P["tps_thick"])
+tps.translate(App.Vector(0,0,P["body_len"]))
+add_obj(tps,"TPS")
+
+# -------------------------
+# Motor / Boquilla
+# -------------------------
+nozzle = Part.makeCone(P["body_diam"]/2, P["nozzle_exit"]/2, P["nozzle_len"])
+nozzle.translate(App.Vector(0,0,-P["nozzle_len"]))
+add_obj(nozzle,"Boquilla")
+
+# -------------------------
+# Paneles solares (x2)
+# -------------------------
+solar1 = Part.makeBox(P["solar_len"], P["solar_w"], P["solar_t"])
+solar1.translate(App.Vector(P["body_diam"]/2+2, -P["solar_w"]/2, P["body_len"]/2))
+add_obj(solar1,"Solar1")
+
+solar2 = Part.makeBox(P["solar_len"], P["solar_w"], P["solar_t"])
+solar2.translate(App.Vector(-P["body_diam"]/2-P["solar_len"], -P["solar_w"]/2, P["body_len"]/2))
+add_obj(solar2,"Solar2")
+
+# -------------------------
+# Anillo soporte
+# -------------------------
+ring = Part.makeTorus(P["ring_ro"], P["ring_t"]/2)
+ring.Placement = App.Placement(App.Vector(0,0,P["body_len"]/2),
+                               App.Rotation(App.Vector(1,0,0),90))
+add_obj(ring,"Anillo soporte")
+
+Gui.ActiveDocument.ActiveView.fitAll()

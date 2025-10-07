@@ -1,0 +1,236 @@
+# -*- coding:utf-8 -*-
+import FreeCAD as App, FreeCADGui as Gui, Part, math
+
+doc_name = "SolarParker_Cohete_Grande"
+if App.ActiveDocument is None or App.ActiveDocument.Label != doc_name:
+    App.newDocument(doc_name)
+doc = App.ActiveDocument
+
+# -------------------------
+# Parámetros globales
+# -------------------------
+P = {
+    # Cuerpo central y tanque principal
+    "tank_len": 4000.0, "tank_d": 2200.0, "hull_t": 20.0,
+    # Escudo térmico (TPS frontal: cúpula esférica)
+    "tps_front_R": 1800.0, "tps_front_t": 60.0, "tps_offset": 250.0,
+    # Transición cónica (shoulder) entre TPS y casco
+    "shoulder_len": 400.0,
+    # Casco exterior (hull) para dar volumen
+    "hull_outer_d": 2600.0,
+    # Paneles solares (se mantienen, se recolocan)
+    "solar_len": 2500.0, "solar_w": 800.0, "solar_t": 30.0,
+    # Cámara de combustión
+    "chamber_len": 1500.0, "chamber_d": 1200.0,
+    # Tobera tipo campana
+    "throat_d": 400.0, "exit_d": 2400.0, "nozzle_len": 2000.0,
+    "nozzle_mid_d": 1600.0, "nozzle_mid_x": 700.0,
+    # Aro de gimbal
+    "gimbal_ring_ro": 1400.0, "gimbal_ring_ri": 1320.0, "gimbal_ring_t": 40.0,
+    # Antenas/mástiles
+    "mast_len": 1500.0, "mast_d": 80.0, "mast_tip_R": 180.0, "mast_tip_t": 6.0,
+    # Sunshades (4 en cruz)
+    "shade_len": 1000.0, "shade_w": 700.0, "shade_t": 40.0, "shade_r": 1500.0,
+    # Puntales radiales
+    "strut_d": 90.0, "strut_r": 1200.0,
+    # TPS trasero (aft shield)
+    "aft_shield_len": 600.0, "aft_shield_d1": 2200.0, "aft_shield_d2": 1600.0,
+}
+
+# -------------------------
+# Utilidades
+# -------------------------
+X_AXIS = App.Vector(1,0,0); Y_AXIS = App.Vector(0,1,0); Z_AXIS = App.Vector(0,0,1)
+def rot_to_x(): return App.Rotation(Y_AXIS, 90)
+
+def add_obj(shape, name):
+    o = doc.addObject("Part::Feature", name); o.Shape = shape; return o
+def color(o, rgb):
+    try: o.ViewObject.ShapeColor = rgb
+    except: pass
+
+def cyl_x(d, L, cx=0, cy=0, cz=0):
+    s = Part.makeCylinder(d/2.0, L)
+    s.Placement = App.Placement(App.Vector(cx - L/2.0, cy, cz), rot_to_x())
+    return s
+
+def cone_x(d1, d2, L, cx=0, cy=0, cz=0):
+    s = Part.makeCone(d1/2.0, d2/2.0, L)
+    s.Placement = App.Placement(App.Vector(cx - L/2.0, cy, cz), rot_to_x())
+    return s
+
+def circle_wire(d, cx, cy=0, cz=0):
+    circle = Part.Circle(App.Vector(cx, cy, cz), App.Vector(1,0,0), d/2.0)
+    return circle.toShape()
+
+# -------------------------
+# Tanque principal
+# -------------------------
+tank_cx = 0.0
+tank = cyl_x(P["tank_d"], P["tank_len"], cx=tank_cx)
+tank_obj = add_obj(tank,"Tank"); color(tank_obj,(0.2,0.6,1.0))
+
+# -------------------------
+# Casco exterior (hull) para volumen
+# -------------------------
+hull = cyl_x(P["hull_outer_d"], P["tank_len"], cx=tank_cx)
+# Hueco: casco exterior menos tanque (para remarcar espesor)
+hull_shell = hull.cut(tank)
+hull_obj = add_obj(hull_shell,"HullOuter"); color(hull_obj,(0.15,0.3,0.55))
+
+# -------------------------
+# Escudo térmico frontal (TPS cúpula)
+# -------------------------
+# Cúpula esférica hueca (frontal, mirando +X)
+R = P["tps_front_R"]; t = P["tps_front_t"]
+cap_center_x = tank_cx + P["tank_len"]/2.0 + P["tps_offset"]
+# Esfera exterior
+sphere_out = Part.makeSphere(R)
+sphere_out.Placement = App.Placement(App.Vector(cap_center_x,0,0), App.Rotation())
+# Esfera interior para espesor
+sphere_in = Part.makeSphere(R - t)
+sphere_in.Placement = App.Placement(App.Vector(cap_center_x,0,0), App.Rotation())
+cap_out = sphere_out
+cap_in = sphere_in
+# Recortar a hemisferio frontal (x >= center)
+box = Part.makeBox(2*R, 4*R, 4*R, App.Vector(cap_center_x, -2*R, -2*R))
+cap_outer_hemi = cap_out.common(box)
+cap_inner_hemi = cap_in.common(box)
+tps_front = cap_outer_hemi.cut(cap_inner_hemi)
+tps_front_obj = add_obj(tps_front,"TPS_Front"); color(tps_front_obj,(0.08,0.08,0.08))
+
+# -------------------------
+# Shoulder cónico entre TPS y casco
+# -------------------------
+shoulder_cx = cap_center_x - P["shoulder_len"]/2.0
+shoulder = cone_x(d1=2.0*R, d2=P["hull_outer_d"], L=P["shoulder_len"], cx=shoulder_cx)
+shoulder_obj = add_obj(shoulder,"TPS_Shoulder"); color(shoulder_obj,(0.1,0.1,0.12))
+
+# -------------------------
+# Sunshades (4 paneles térmicos en cruz alrededor del TPS)
+# -------------------------
+def make_shade(offset_vec, name):
+    s = Part.makeBox(P["shade_len"], P["shade_w"], P["shade_t"])
+    # Orientamos el largo del panel sobre +X, ancho sobre radial (Y/Z)
+    s.translate(App.Vector(cap_center_x - P["shade_len"]/2.0, 0, 0))
+    s.translate(offset_vec)
+    o = add_obj(s, name); color(o,(0.25,0.25,0.25)); return o
+
+r = P["shade_r"]; w = P["shade_w"]
+shadeYp = make_shade(App.Vector(0,  r - w/2.0, 0), "Shade_Yp")
+shadeYn = make_shade(App.Vector(0, -r - w/2.0, 0), "Shade_Yn")
+shadeZp = make_shade(App.Vector(0, 0,  r - w/2.0), "Shade_Zp")
+shadeZn = make_shade(App.Vector(0, 0, -r - w/2.0), "Shade_Zn")
+
+# -------------------------
+# Puntales radiales TPS–Hull
+# -------------------------
+def strut_at(y, z, name):
+    # Puntal como cilindro a lo largo de X, ubicado radialmente
+    L = P["tps_offset"] + P["shoulder_len"]/2.0
+    cx = tank_cx + P["tank_len"]/2.0 + L/2.0
+    s = cyl_x(P["strut_d"], L, cx=cx, cy=y, cz=z)
+    o = add_obj(s, name); color(o,(0.45,0.45,0.45)); return o
+
+strut1 = strut_at( P["strut_r"], 0, "Strut_Yp")
+strut2 = strut_at(-P["strut_r"], 0, "Strut_Yn")
+strut3 = strut_at(0,  P["strut_r"], "Strut_Zp")
+strut4 = strut_at(0, -P["strut_r"], "Strut_Zn")
+
+# -------------------------
+# Cámara de combustión
+# -------------------------
+chamber_cx = tank_cx - P["tank_len"]/2.0 - P["chamber_len"]/2.0
+chamber = cyl_x(P["chamber_d"], P["chamber_len"], cx=chamber_cx)
+chamber_obj = add_obj(chamber,"Chamber"); color(chamber_obj,(0.7,0.7,0.6))
+
+# -------------------------
+# Tobera (loft paramétrico)
+# -------------------------
+throat_cx = chamber_cx - P["chamber_len"]/2.0
+exit_cx   = throat_cx - P["nozzle_len"]
+w_throat = circle_wire(P["throat_d"], throat_cx)
+w_mid    = circle_wire(P["nozzle_mid_d"], throat_cx - P["nozzle_mid_x"])
+w_exit   = circle_wire(P["exit_d"], exit_cx)
+loft = Part.makeLoft([w_throat, w_mid, w_exit], True)
+nozzle_obj = add_obj(loft,"Nozzle"); color(nozzle_obj,(0.6,0.6,0.6))
+
+# -------------------------
+# Aro de gimbal (detalle estructural)
+# -------------------------
+ring_cx = chamber_cx + P["chamber_len"]/2.0
+ring_outer = Part.makeTorus(P["gimbal_ring_ro"], P["gimbal_ring_t"]/2.0)
+ring_outer.Placement = App.Placement(App.Vector(ring_cx,0,0), rot_to_x())
+ring_inner = Part.makeTorus(P["gimbal_ring_ri"], P["gimbal_ring_t"]/2.0)
+ring_inner.Placement = App.Placement(App.Vector(ring_cx,0,0), rot_to_x())
+gimbal_ring = ring_outer.cut(ring_inner)
+gimbal_obj = add_obj(gimbal_ring,"Gimbal"); color(gimbal_obj,(0.5,0.5,0.5))
+
+# -------------------------
+# TPS trasero (aft shield)
+# -------------------------
+aft_cx = chamber_cx + P["chamber_len"]/2.0 + P["aft_shield_len"]/2.0
+aft_shield = cone_x(P["aft_shield_d1"], P["aft_shield_d2"], P["aft_shield_len"], cx=aft_cx)
+aft_obj = add_obj(aft_shield,"TPS_Aft"); color(aft_obj,(0.1,0.1,0.12))
+
+# -------------------------
+# Paneles solares (reubicados en cruceta alrededor del casco)
+# -------------------------
+# Y+: montado lateral derecho, adelantado hacia la mitad frontal del tanque
+solarYp = Part.makeBox(P["solar_len"], P["solar_w"], P["solar_t"])
+solarYp.translate(App.Vector( -P["solar_len"]/2.0 + tank_cx + P["tank_len"]/4.0,
+                              P["hull_outer_d"]/2.0 + 50.0,  600.0))
+solarYp_obj = add_obj(solarYp,"Solar_Yp"); color(solarYp_obj,(0.9,0.7,0.2))
+
+# Y-: lado izquierdo
+solarYn = Part.makeBox(P["solar_len"], P["solar_w"], P["solar_t"])
+solarYn.translate(App.Vector( -P["solar_len"]/2.0 + tank_cx + P["tank_len"]/4.0,
+                             -P["hull_outer_d"]/2.0 - P["solar_w"] - 50.0, 600.0))
+solarYn_obj = add_obj(solarYn,"Solar_Yn"); color(solarYn_obj,(0.9,0.7,0.2))
+
+# Z+: dorsal
+solarZp = Part.makeBox(P["solar_len"], P["solar_w"], P["solar_t"])
+solarZp.translate(App.Vector( -P["solar_len"]/2.0 + tank_cx + P["tank_len"]/4.0,
+                              -P["solar_w"]/2.0,  P["hull_outer_d"]/2.0 + 60.0))
+solarZp_obj = add_obj(solarZp,"Solar_Zp"); color(solarZp_obj,(0.9,0.7,0.2))
+
+# Z-: ventral
+solarZn = Part.makeBox(P["solar_len"], P["solar_w"], P["solar_t"])
+solarZn.translate(App.Vector( -P["solar_len"]/2.0 + tank_cx + P["tank_len"]/4.0,
+                              -P["solar_w"]/2.0, -P["hull_outer_d"]/2.0 - 60.0 - P["solar_t"]))
+solarZn_obj = add_obj(solarZn,"Solar_Zn"); color(solarZn_obj,(0.9,0.7,0.2))
+
+# -------------------------
+# Mástil científico con cúpula en la punta
+# -------------------------
+mast1 = cyl_x(P["mast_d"], P["mast_len"], cx=tank_cx+P["tank_len"]/2.0 - 200.0, cy=0.0, cz=P["hull_outer_d"]/2.0 + 200.0)
+mast_obj = add_obj(mast1,"Mast"); color(mast_obj,(0.8,0.8,0.9))
+# Cúpula hemisférica en la punta
+tip_center = mast1.BoundBox.XMax  # extremo +X del mástil (aprox)
+sphere_tip_out = Part.makeSphere(P["mast_tip_R"])
+sphere_tip_in  = Part.makeSphere(P["mast_tip_R"] - P["mast_tip_t"])
+# centrado en el extremo del mástil
+sphere_tip_out.Placement = App.Placement(App.Vector(tip_center, mast1.BoundBox.YCenter, mast1.BoundBox.ZCenter), App.Rotation())
+sphere_tip_in.Placement  = sphere_tip_out.Placement
+# hemisferio frontal
+box_tip = Part.makeBox(2*P["mast_tip_R"], 4*P["mast_tip_R"], 4*P["mast_tip_R"], App.Vector(tip_center, mast1.BoundBox.YCenter - 2*P["mast_tip_R"], mast1.BoundBox.ZCenter - 2*P["mast_tip_R"]))
+tip_shell = sphere_tip_out.common(box_tip).cut(sphere_tip_in.common(box_tip))
+tip_obj = add_obj(tip_shell,"MastTip"); color(tip_obj,(0.85,0.85,0.9))
+
+# -------------------------
+# Agrupar
+# -------------------------
+grp = doc.addObject("App::Part","SolarParkerRocket")
+for o in [tank_obj,hull_obj,tps_front_obj,shoulder_obj,
+          shadeYp,shadeYn,shadeZp,shadeZn,
+          strut1,strut2,strut3,strut4,
+          chamber_obj,nozzle_obj,gimbal_obj,aft_obj,
+          solarYp_obj,solarYn_obj,solarZp_obj,solarZn_obj,
+          mast_obj,tip_obj]:
+    grp.addObject(o)
+
+doc.recompute()
+try:
+    Gui.ActiveDocument.ActiveView.viewAxonometric()
+    Gui.SendMsgToActiveView("ViewFit")
+except: pass

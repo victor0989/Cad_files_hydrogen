@@ -1,0 +1,236 @@
+# -*- coding:utf-8 -*-
+import FreeCAD as App, FreeCADGui as Gui, Part, math
+
+doc_name = "Green_Ammonia_Motor_Stable"
+if App.ActiveDocument is None or App.ActiveDocument.Label != doc_name:
+    App.newDocument(doc_name)
+doc = App.ActiveDocument
+
+# -------------------------
+# Parámetros del conjunto
+# -------------------------
+P = {
+    # Tanque NH3
+    "tank_len": 2000.0, "tank_d": 1200.0, "hull_t": 12.0,
+    # Bridas y puertos
+    "flange_d": 220.0, "flange_t": 18.0, "port_d": 120.0, "port_l": 140.0,
+    # Presurización
+    "press_sphere_d": 450.0, "press_line_d": 40.0,
+    # Líneas (diámetros externos)
+    "feed_line_d": 80.0, "purge_line_d": 50.0, "relief_line_d": 60.0,
+    # Válvulas (cuerpo simplificado)
+    "valve_body_d": 160.0, "valve_body_l": 220.0, "valve_handwheel_d": 120.0,
+    # Cámara y reactor
+    "chamber_len": 900.0, "chamber_d": 700.0,
+    "reactor_len": 500.0, "reactor_d": 500.0,
+    "injector_plate_t": 20.0, "injector_throat_d": 280.0,
+    "injector_holes_n": 24, "injector_hole_d": 12.0, "injector_pitch": 160.0,
+    # Camisa de refrigeración
+    "jacket_gap": 12.0, "jacket_inlet_d": 50.0, "jacket_outlet_d": 50.0,
+    # Tobera tipo campana (loft)
+    "throat_d": 280.0, "exit_d": 900.0, "nozzle_len": 800.0,
+    "nozzle_mid_d": 600.0, "nozzle_mid_x": 300.0,
+    # Estructura y gimbal
+    "gimbal_ring_ro": 750.0, "gimbal_ring_ri": 700.0, "gimbal_ring_t": 20.0,
+    "lug_w": 120.0, "lug_t": 30.0, "lug_h": 160.0, "lug_n": 4,
+    "strut_d": 40.0,
+    # Sensores (bosses)
+    "boss_d": 60.0, "boss_h": 35.0, "boss_n": 6,
+    # Tabique interno del tanque
+    "baffle_t": 6.0, "baffle_offset": 500.0,
+    # Colocación (eje X como largo)
+    "assembly_offset_x": 0.0
+}
+
+# -------------------------
+# Utilidades
+# -------------------------
+X_AXIS = App.Vector(1,0,0); Y_AXIS = App.Vector(0,1,0); Z_AXIS = App.Vector(0,0,1)
+def rot_to_x(): return App.Rotation(Y_AXIS, 90)
+def add_obj(shape, name):
+    o = doc.addObject("Part::Feature", name); o.Shape = shape; return o
+def color(o, rgb):
+    try: o.ViewObject.ShapeColor = rgb
+    except: pass
+
+def cyl_x(d, L, cx=0, cy=0, cz=0):
+    s = Part.makeCylinder(d/2.0, L)
+    s.Placement = App.Placement(App.Vector(cx - L/2.0, cy, cz), rot_to_x())
+    return s
+
+def cone_x(d1, d2, L, cx=0, cy=0, cz=0):
+    s = Part.makeCone(d1/2.0, d2/2.0, L)
+    s.Placement = App.Placement(App.Vector(cx - L/2.0, cy, cz), rot_to_x())
+    return s
+
+def sphere(cx, cy, cz, d):
+    return Part.makeSphere(d/2.0, App.Vector(cx, cy, cz))
+
+def circle_wire(d, cx, cy=0, cz=0):
+    circle = Part.Circle(App.Vector(cx, cy, cz), App.Vector(1,0,0), d/2.0)
+    return circle.toShape()
+
+# Hemisferio-shell estable (sin offsets sobre formas abiertas)
+def make_hemisphere_shell(center_x, radius, thickness, side='L'):
+    if thickness >= radius:
+        raise ValueError("Espesor mayor o igual al radio: ajusta 'hull_t'.")
+    sph_out = Part.makeSphere(radius, App.Vector(center_x, 0, 0))
+    sph_in  = Part.makeSphere(radius - thickness, App.Vector(center_x, 0, 0))
+    # Caja grande para recortar media esfera
+    L = 10.0 * radius; W = 10.0 * radius; H = 10.0 * radius
+    if side.upper() == 'L':
+        box = Part.makeBox(L, W, H, App.Vector(center_x - L, -W/2.0, -H/2.0))
+    else:
+        box = Part.makeBox(L, W, H, App.Vector(center_x, -W/2.0, -H/2.0))
+    hemi_out = sph_out.common(box)
+    hemi_in  = sph_in.common(box)
+    return hemi_out.cut(hemi_in)
+
+# -------------------------
+# Tanque NH3 con cabezales hemisféricos
+# -------------------------
+R = P["tank_d"] / 2.0
+t = P["hull_t"]
+tank_cx = P["assembly_offset_x"]
+headL_center_x = tank_cx - P["tank_len"]/2.0
+headR_center_x = tank_cx + P["tank_len"]/2.0
+
+# Cuerpo cilíndrico hueco
+tank_wall = cyl_x(P["tank_d"], P["tank_len"], cx=tank_cx)
+tank_inner = cyl_x(P["tank_d"] - 2*t, P["tank_len"], cx=tank_cx)
+tank_shell = tank_wall.cut(tank_inner)
+
+# Cabezal izquierdo y derecho (shell)
+headL_shell = make_hemisphere_shell(headL_center_x, R, t, side='L')
+headR_shell = make_hemisphere_shell(headR_center_x, R, t, side='R')
+
+# Fusión total del tanque
+tank_total = tank_shell.fuse(headL_shell).fuse(headR_shell)
+tank_obj = add_obj(tank_total, "NH3_Tank"); color(tank_obj, (0.2, 0.6, 1.0))
+
+# Tabique interno
+baffle = cyl_x(P["tank_d"] - 2*t, P["baffle_t"], cx=tank_cx - P["baffle_offset"])
+baffle_obj = add_obj(baffle, "Baffle"); color(baffle_obj, (0.3, 0.3, 0.3))
+
+# Collarines de brida en ambos extremos del cilindro
+flangeL = cyl_x(P["tank_d"] + 40.0, P["flange_t"], cx=headL_center_x - P["flange_t"]/2.0)
+flangeR = cyl_x(P["tank_d"] + 40.0, P["flange_t"], cx=headR_center_x + P["flange_t"]/2.0)
+flanges_obj = add_obj(flangeL.fuse(flangeR), "Tank_Flanges"); color(flanges_obj, (0.8, 0.8, 0.8))
+
+# -------------------------
+# Presurización
+# -------------------------
+press_cx = headL_center_x - 600.0
+press = sphere(press_cx, 0, 0, P["press_sphere_d"])
+press_obj = add_obj(press, "Pressurant_Sphere"); color(press_obj, (1.0, 0.86, 0.0))
+
+press_line = cyl_x(P["press_line_d"], 600.0, cx=press_cx + 300.0, cy=P["tank_d"]/2.0 + 60.0)
+press_line_obj = add_obj(press_line, "Press_Line"); color(press_line_obj, (1.0, 0.86, 0.0))
+
+# -------------------------
+# Puertos laterales del tanque (feed, purge, relief) + válvulas
+# -------------------------
+def side_port(name, y_offset, d_ext, L, cx):
+    tube = cyl_x(d_ext, L, cx=cx, cy=y_offset)
+    br = cyl_x(d_ext + 40.0, 18.0, cx=cx + L/2.0 + 9.0, cy=y_offset)
+    return add_obj(tube.fuse(br), name)
+
+port_cx = tank_cx
+feed_port = side_port("Port_Feed",  P["tank_d"]/2.0 - 120.0, P["feed_line_d"],   300.0, port_cx
+feed_port = side_port("Port_Feed",  P["tank_d"]/2.0 - 120.0, P["feed_line_d"],   300.0, port_cx)
+color(feed_port, (0.0, 0.7, 0.4))
+
+purge_port = side_port("Port_Purge", -P["tank_d"]/2.0 + 160.0, P["purge_line_d"], 280.0, port_cx - 350.0)
+color(purge_port, (0.0, 0.7, 0.9))
+
+relief_port = side_port("Port_Relief", P["tank_d"]/2.0 - 40.0, P["relief_line_d"], 260.0, port_cx + 200.0)
+color(relief_port, (0.9, 0.3, 0.0))
+
+# Válvulas simplificadas
+def valve_inline(name, line_cx, y, body_d, body_l):
+    body = cyl_x(body_d, body_l, cx=line_cx, cy=y)
+    wheel = Part.makeTorus(P["valve_handwheel_d"]/2.0, 10.0)
+    wheel.Placement = App.Placement(App.Vector(line_cx, y, 0), rot_to_x())
+    return add_obj(body.fuse(wheel), name)
+
+val_feed   = valve_inline("Valve_Feed",   port_cx - 250.0,  P["tank_d"]/2.0 - 120.0, P["valve_body_d"], P["valve_body_l"])
+val_purge  = valve_inline("Valve_Purge",  port_cx - 200.0, -P["tank_d"]/2.0 + 160.0, P["valve_body_d"]*0.75, P["valve_body_l"]*0.8)
+val_relief = valve_inline("Valve_Relief", port_cx + 320.0,  P["tank_d"]/2.0 - 40.0,  P["valve_body_d"]*0.85, P["valve_body_l"]*0.9)
+
+color(val_feed, (0.6,0.6,0.6))
+color(val_purge,(0.6,0.6,0.6))
+color(val_relief,(0.6,0.6,0.6))
+
+# -------------------------
+# Cámara de combustión y reactor
+# -------------------------
+chamber_cx = port_cx + P["tank_len"]/2.0 + 300.0
+chamber_outer = cyl_x(P["chamber_d"], P["chamber_len"], cx=chamber_cx)
+chamber_inner = cyl_x(P["chamber_d"] - 2*P["hull_t"], P["chamber_len"], cx=chamber_cx)
+chamber_shell = chamber_outer.cut(chamber_inner)
+chamber_obj = add_obj(chamber_shell, "Chamber"); color(chamber_obj, (0.8,0.7,0.6))
+
+reactor_cx = chamber_cx - P["chamber_len"]/2.0 + P["reactor_len"]/2.0 + 80.0
+reactor = cyl_x(P["reactor_d"], P["reactor_len"], cx=reactor_cx)
+reactor_obj = add_obj(reactor, "Catalyst_Reactor"); color(reactor_obj, (0.9,0.9,0.5))
+
+# Placa inyectora
+injector_plate_cx = chamber_cx + P["chamber_len"]/2.0 - P["injector_plate_t"]/2.0
+injector_plate = cyl_x(P["injector_throat_d"], P["injector_plate_t"], cx=injector_plate_cx)
+
+holes = []
+for i in range(P["injector_holes_n"]):
+    ang = 360.0 * i / P["injector_holes_n"]
+    y = (P["injector_pitch"]/2.0) * math.cos(math.radians(ang))
+    z = (P["injector_pitch"]/2.0) * math.sin(math.radians(ang))
+    h = cyl_x(P["injector_hole_d"], P["injector_plate_t"]+1.0, cx=injector_plate_cx, cy=y, cz=z)
+    holes.append(h)
+holeS = holes[0]
+for h in holes[1:]: holeS = holeS.fuse(h)
+injector_plate = injector_plate.cut(holeS)
+injector_obj = add_obj(injector_plate, "Injector_Plate"); color(injector_obj, (0.6,0.6,0.9))
+
+# Camisa de refrigeración
+jacket_outer = cyl_x(P["chamber_d"] + 2*P["jacket_gap"], P["chamber_len"]*0.75, cx=chamber_cx - P["chamber_len"]*0.1)
+jacket_inner = cyl_x(P["chamber_d"], P["chamber_len"]*0.75, cx=chamber_cx - P["chamber_len"]*0.1)
+jacket_shell = jacket_outer.cut(jacket_inner)
+jacket_obj = add_obj(jacket_shell, "Cooling_Jacket"); color(jacket_obj, (0.4,0.8,0.9))
+
+# -------------------------
+# Tobera tipo campana (loft)
+# -------------------------
+throat_cx = injector_plate_cx + P["injector_plate_t"]/2.0 + 30.0
+exit_cx   = throat_cx + P["nozzle_len"]
+
+w_throat = circle_wire(P["throat_d"], throat_cx)
+w_mid    = circle_wire(P["nozzle_mid_d"], throat_cx + P["nozzle_mid_x"])
+w_exit   = circle_wire(P["exit_d"], exit_cx)
+
+loft = Part.makeLoft([w_throat, w_mid, w_exit], True)
+nozzle_obj = add_obj(loft, "Nozzle"); color(nozzle_obj, (0.7,0.7,0.7))
+
+# -------------------------
+# Estructura: aro de cardán y orejetas
+# -------------------------
+ring_cx = chamber_cx - P["chamber_len"]/2.0 - 60.0
+ring_outer = Part.makeTorus(P["gimbal_ring_ro"], P["gimbal_ring_t"]/2.0)
+ring_outer.Placement = App.Placement(App.Vector(ring_cx,0,0), rot_to_x())
+ring_inner = Part.makeTorus(P["gimbal_ring_ri"], P["gimbal_ring_t"]/2.0)
+ring_inner.Placement = App.Placement(App.Vector(ring_cx,0,0), rot_to_x())
+gimbal_ring = ring_outer.cut(ring_inner)
+gimbal_obj = add_obj(gimbal_ring, "Gimbal_Ring"); color(gimbal_obj, (0.5,0.5,0.5))
+
+# -------------------------
+# Agrupar todo
+# -------------------------
+grp = doc.addObject("App::Part","GreenAmmoniaMotor")
+for o in [tank_obj,baffle_obj,flanges_obj,press_obj,press_line_obj,
+          feed_port,purge_port,relief_port,val_feed,val_purge,val_relief,
+          chamber_obj,reactor_obj,injector_obj,jacket_obj,nozzle_obj,gimbal_obj]:
+    grp.addObject(o)
+
+doc.recompute()
+try:
+    Gui.ActiveDocument.ActiveView.viewAxonometric()
+    Gui.SendMsgToActiveView("ViewFit")
+except: pass
