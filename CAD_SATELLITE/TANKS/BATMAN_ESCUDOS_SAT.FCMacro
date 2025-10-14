@@ -1,0 +1,185 @@
+# -*- coding: utf-8 -*-
+import FreeCAD as App
+import FreeCADGui as Gui
+import Part, math
+
+# ---------- Documento ----------
+DOC_NAME = "Satelite_Batman"
+doc = App.ActiveDocument
+if not doc or doc.Label != DOC_NAME:
+    doc = App.newDocument(DOC_NAME)
+App.ActiveDocument = doc
+
+# ---------- Parámetros ----------
+P = {
+    "tank_len": 9800.0, "tank_d": 5200.0, "hull_outer_d": 6000.0,
+    "cupola_R": 2000.0, "cupola_t": 35.0,
+    "chamber_len": 3000.0, "chamber_d": 2500.0, "throat_d": 820.0,
+    "exit_d": 5200.0, "nozzle_len": 4200.0, "nozzle_mid_d": 3000.0,
+    "gimbal_ring_ro": 2500.0, "gimbal_ring_ri": 2200.0, "gimbal_ring_t": 120.0,
+    "turbopump_len": 820.0, "turbopump_d": 620.0, "volute_d": 720.0,
+    "av_bay_len": 1800.0, "av_bay_w": 1400.0, "av_bay_h": 900.0,
+    "rack_w": 480.0, "rack_h": 680.0, "rack_len": 600.0,
+    "strut_d": 120.0, "strut_count": 12,
+    "round_shield_R": 9000.0, "round_shield_t": 180.0,
+    "round_shield_offset": 1200.0, "round_shield_layers": 3, "round_shield_gap": 600.0
+}
+
+STATE = {
+    "cupola_enabled": True, "turbopump_enabled": True,
+    "avionics_enabled": True, "round_shield_enabled": True
+}
+
+DENS = {"CFRP":1600,"Al":2700,"Ti":4500,"CeramicTPS":3200}
+MARGIN_MODEL, MARGIN_INTEGRATION = 0.10, 0.05
+mass_rollup = {}
+
+# ---------- Utilidades ----------
+X_AXIS = App.Vector(1,0,0); Y_AXIS = App.Vector(0,1,0); ROT_TO_X = App.Rotation(Y_AXIS,90)
+
+def place_x_aligned(s,L,cx=0,cy=0,cz=0): s.Placement=App.Placement(App.Vector(cx-L/2,cy,cz),ROT_TO_X)
+
+def add_obj(s,n,c=None):
+    o=doc.addObject("Part::Feature",n)
+    o.Shape=s
+    if c: o.ViewObject.ShapeColor=c
+    return o
+
+def cyl_x(d,L,cx=0,cy=0,cz=0): s=Part.makeCylinder(d/2,L); place_x_aligned(s,L,cx,cy,cz); return s
+def box_at(l,w,t,x,y,z): b=Part.makeBox(l,w,t); b.translate(App.Vector(x,y,z)); return b
+def add_group(n): return doc.addObject("App::DocumentObjectGroup",n)
+def polar_positions(r,count,cx=0,z=0,phase=0): return [(cx,r*math.cos(math.radians(phase+360*i/count)),z+r*math.sin(math.radians(phase+360*i/count))) for i in range(count)]
+def mm3_to_m3(v): return v/1e9
+def mass(s,d): return mm3_to_m3(s.Volume)*d
+def log_mass_subsys(subsys,s,mat): dens=DENS.get(mat,2700); m=mass(s,dens)*(1+MARGIN_MODEL+MARGIN_INTEGRATION); mass_rollup[subsys]=mass_rollup.get(subsys,0)+m; return m
+def fuse_safe(shapes): 
+    if not shapes: return None
+    fused=shapes[0]
+    for s in shapes[1:]:
+        try: fused=fused.fuse(s)
+        except: pass
+    return fused
+
+# ---------- Núcleo ----------
+tank_cx=0
+tank=add_obj(cyl_x(P["tank_d"],P["tank_len"],cx=tank_cx),"Tank",(0.2,0.6,1.0))
+hull=add_obj(cyl_x(P["hull_outer_d"],P["tank_len"],cx=tank_cx).cut(tank.Shape),"Hull",(0.12,0.28,0.5))
+
+# ---------- Cupola ----------
+def build_cupola_solid(P,base_cx,outer_d):
+    hemi=Part.makeSphere(P["cupola_R"]); hemi.Placement=App.Placement(App.Vector(base_cx,0,0),App.Rotation())
+    shell=hemi.cut(Part.makeSphere(P["cupola_R"]-P["cupola_t"]))
+    cup=add_obj(shell,"Cupola",(0.18,0.22,0.28)); log_mass_subsys("Cupola",cup.Shape,"CFRP")
+    return add_group("CupolaGrp"), shell
+
+# ---------- Propulsión ----------
+def build_propulsion(P, base_cx):
+    grp=add_group("Propulsion")
+    Lc, Dc, Dt, De, Ln = P["chamber_len"],P["chamber_d"],P["throat_d"],P["exit_d"],P["nozzle_len"]
+    chamber=add_obj(cyl_x(Dc,Lc,cx=base_cx),"Chamber",(0.55,0.55,0.6)); grp.addObject(chamber)
+    log_mass_subsys("Propulsion",chamber.Shape,"Ti")
+    conv_len=0.25*Ln; conv_cx=base_cx+Lc/2+conv_len/2
+    conv=Part.makeCone(Dc/2,Dt/2,conv_len); place_x_aligned(conv,conv_len,conv_cx); conv_obj=add_obj(conv,"NozzleConv",(0.5,0.5,0.55)); grp.addObject(conv_obj)
+    log_mass_subsys("Propulsion",conv_obj.Shape,"Ti")
+    div_len=Ln-conv_len; div_cx=conv_cx+conv_len/2+div_len/2
+    div=Part.makeCone(Dt/2,De/2,div_len); place_x_aligned(div,div_len,div_cx); div_obj=add_obj(div,"NozzleDiv",(0.48,0.48,0.52)); grp.addObject(div_obj)
+    log_mass_subsys("Propulsion",div_obj.Shape,"Ti")
+    return grp, div_cx+div_len/2
+
+# ---------- Turbopump ----------
+def build_turbopump_solid(P,attach_cx):
+    body=cyl_x(P["turbopump_d"],P["turbopump_len"],cx=attach_cx-P["turbopump_len"]/2)
+    tp=add_obj(body,"Turbopump",(0.45,0.46,0.50)); log_mass_subsys("Turbopump",tp.Shape,"Ti")
+    return add_group("TurbopumpGrp"), body
+
+# ---------- Avionics ----------
+def build_avionics_sat_solid(P,bus_cx):
+    bay=box_at(P["av_bay_len"],P["av_bay_w"],P["av_bay_h"],bus_cx-P["av_bay_len"]/2,P["bus_outer_d"]/2+200,-P["av_bay_h"]/2)
+    av=add_obj(bay,"Avionics",(0.22,0.28,0.36)); log_mass_subsys("AvionicsBay",av.Shape,"CFRP")
+    return add_group("AvionicsGrp"), bay
+
+# ---------- Soportes ----------
+def build_struct_supports_solid(P,front_cx,outer_d):
+    grp=add_group("StructSupports"); struts=[]
+    for (cx,cy,cz) in polar_positions(outer_d/2,P["strut_count"],front_cx,0):
+        s=cyl_x(P["strut_d"],P["cupola_R"],cx=cx-P["cupola_R"]/2,cy=cy,cz=cz)
+        strut_obj=add_obj(s,"Strut",(0.5,0.5,0.52)); grp.addObject(strut_obj)
+        log_mass_subsys("Strut",strut_obj.Shape,"Ti"); struts.append(s)
+    solid=fuse_safe(struts)
+    if solid: grp.addObject(add_obj(solid,"StructSolid",(0.44,0.46,0.50)))
+    return grp, solid
+
+# ---------- Escudo redondo ----------
+def build_round_shield(P, front_cx):
+    grp = add_group("RoundShield")
+    R0 = P["round_shield_R"]
+    t  = P["round_shield_t"]
+    gap = P["round_shield_gap"]
+    n_layers = P["round_shield_layers"]
+
+    disks = []
+    for i in range(n_layers):
+        offset = P["round_shield_offset"] + i * gap
+        cx = front_cx + offset
+        # Cada capa ligeramente menor para escalonado
+        d_eff = max(R0 * 2 - i * 800.0, 1000.0)
+        disk = cyl_x(d_eff, t, cx=cx)
+        disk_obj = add_obj(disk, f"RoundShield_{i+1}", (0.15, 0.15, 0.20))
+        grp.addObject(disk_obj)
+        log_mass_subsys("RoundShield", disk_obj.Shape, "CeramicTPS")
+        disks.append(disk)
+
+    shield_solid = fuse_safe(disks)
+    if shield_solid:
+        solid_obj = add_obj(shield_solid, "RoundShieldSolid", (0.18, 0.18, 0.22))
+        grp.addObject(solid_obj)
+
+    return grp, shield_solid
+
+# ---------- Construcción del sistema ----------
+prop_grp, aft_x = build_propulsion(P, base_cx=tank_cx + P["tank_len"] / 2 + 600.0)
+cupola_grp, cupola_solid = build_cupola_solid(P, base_cx=tank_cx + P["tank_len"] / 2, outer_d=P["hull_outer_d"]) if STATE.get("cupola_enabled") else (None, None)
+turbopump_grp, turbopump_solid = build_turbopump_solid(P, attach_cx=aft_x) if STATE.get("turbopump_enabled") else (None, None)
+avionics_grp, avionics_solid = build_avionics_sat_solid(P, bus_cx=tank_cx) if STATE.get("avionics_enabled") else (None, None)
+
+front_cx = tank_cx + P["tank_len"] / 2
+struct_grp, struct_solid = build_struct_supports_solid(P, front_cx=front_cx, outer_d=P["hull_outer_d"])
+round_shield_grp, round_shield_solid = build_round_shield(P, front_cx=front_cx) if STATE.get("round_shield_enabled") else (None, None)
+
+# ---------- MasterSolid para FEM ----------
+master_parts = []
+for obj in [hull.Shape, cupola_solid, turbopump_solid, avionics_solid, struct_solid, round_shield_solid]:
+    if obj:
+        master_parts.append(obj)
+
+master_solid = fuse_safe(master_parts)
+master_obj = None
+if master_solid:
+    master_obj = add_obj(master_solid, "MasterSolid_FEM", (0.60, 0.55, 0.65))
+
+# ---------- Agrupación total ----------
+system_grp = add_group("Satelite_Batman_System")
+for g in (
+    tank, hull, prop_grp, cupola_grp, turbopump_grp,
+    avionics_grp, struct_grp, round_shield_grp, master_obj
+):
+    if g:
+        try:
+            system_grp.addObject(g)
+        except Exception:
+            pass
+
+# ---------- Resumen de masas ----------
+print("\n---- Subsystem Mass Rollup (kg, with margins) ----")
+total_subsys = 0.0
+for k, v in sorted(mass_rollup.items()):
+    print(f"{k:20s} {v:10.2f}")
+    total_subsys += v
+print(f"Total subsystems (with margins): {total_subsys:.2f} kg")
+print(f"Core + subsystems total (approx): {total_subsys:.2f} kg")
+
+# ---------- Vista ----------
+doc.recompute()
+if Gui.ActiveDocument:
+    Gui.ActiveDocument.ActiveView.viewAxonometric()
+    Gui.SendMsgToActiveView("ViewFit")
