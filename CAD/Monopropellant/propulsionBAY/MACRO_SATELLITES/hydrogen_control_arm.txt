@@ -1,0 +1,138 @@
+hydrogen_control_arm/
+├── src/
+│   ├── main_control.adb
+│   ├── gas_valve.ads / .adb
+│   ├── gas_safety.ads / .adb
+│   ├── ...
+├── startup.s
+├── linker.ld
+├── hydrogen_arm.gpr
+
+-- .gpr ARM bare-metal
+Project Hydrogen_ARM is
+   for Target use "arm-eabi";
+   for Source_Dirs use ("src");
+   for Object_Dir  use "obj";
+   for Exec_Dir    use "bin";
+   for Main use ("Main_Control.adb")
+
+   package Compiler is
+      for Default_Switches ("Ada") use (
+         "-gnatR",
+         "-gnatf",
+         "-gnatws",
+         "-gnat12",
+         "-fno-exceptions",
+         "-nostdlib"
+);
+end Compiler;
+
+package Linker is
+   for Linker_Options use (
+      "-T", "linker.ld", -- Mapa de memoria
+      "-nostartfiles"  -- usar un startup.s
+);
+end Linker;
+end Hydrogen_ARM;
+
+--$ gnatmake -P hydrogen_arm.gpr
+bin/hydrogen_control_arm.elf
+--$ openocd -f interface/stlink.cfg -f target/stm32f4x.cfg \
+        -c "program bin/hydrogen_control_arm.elf verify reset exit"
+
+Usa pragma Profile (Ravenscar); en todos tus .adb y .ads
+
+Usa pragma Restrictions (No_Implicit_Heap_Allocations);
+
+Evita Ada.Text_IO, Unbounded_String, new, access, select, abort
+
+Usa protected type para sensores, válvulas, watchdogs, etc.
+
+Usa delay until para ciclos periódicos
+
+-- Hydrogen_ARM.gpr
+Project Hydrogen_ARM is
+   for Target use "arm-eabi";
+   for Source_Dirs use ("src");
+   for Object_Dir  use "obj";
+   for Exec_Dir    use "bin";
+   for Main use ("main_control.adb");
+
+package Compiler is
+   for Default_Switches ("Ada") use (
+      "-gnatR", "-gnatf", "-gnatws", "-gnat12", "-fno-exceptions", "-nostdlib"
+);
+end Compiler;
+
+package Linker is
+   for Linker_Otions use ("-T", "linker.ld", "-nostartfiles");
+end Linker;
+end Hydrogen_ARM;
+
+-- startup.s
+.section .text
+.global _start
+
+_start:
+    b Reset_Handler
+
+Reset_Handler:
+    bl main_control
+    b .
+*****************************************************
+-- linker.ld(stm32f4)
+MEMORY
+{
+  FLASH (rx) : ORIGIN = 0x08000000, LENGTH = 512K
+  RAM   (rwx): ORIGIN = 0x20000000, LENGTH = 128K
+}
+
+SECTIONS
+{
+  .text : { *(.text) } > FLASH
+  .data : { *(.data) } > RAM
+  .bss  : { *(.bss) }  > RAM
+}
+
+gnatmake -P hydrogen_arm.gpr
+openocd -f interface/stlink.cfg -f target/stm32f4x.cfg \
+        -c "program bin/hydrogen_control_arm.elf verify reset exit"
+
+-- file Hydrogen_ARM.gpr
+Project Hydrogen_ARM is
+-- platform: ARM bare-metal
+for Target use "arm-eabi";
+
+-- Directories
+for Source_Dirs use ("src");
+for Object_Dir  use "obj";
+for Exec_Dir    use "bin";
+
+-- entrada system
+for Main use ("Main_Control.adb");
+
+-- configuración compiladr GNAT
+package Compiler is
+  for Default_Switches ("Ada") use (
+    "-gnatR",
+    "-gnatf",
+    "-gnatws",
+    "-gnat12",
+    "-fno-exceptions",
+    "-nostdlib" -- no usar librerías estándar
+);
+end Compiler;
+
+-- Configuración
+package Linker is
+   for Linker_Options use (
+      "-T", "linker.ld", -- mapa memoria
+      "-nostartfiles"    -- Usar tu propio startup.s
+);
+end Linker;
+
+end Hydrogen_ARM;
+
+
+
+

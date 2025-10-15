@@ -1,0 +1,87 @@
+hydrogen_control_arm/
+├── src/
+│   ├── main_control.adb
+│   ├── gas_ranges.ads / .adb
+│   ├── gas_valve.ads / .adb
+│   ├── pressure_fault.ads / .adb
+│   ├── fault_gpio.ads / .adb
+│   ├── telemetry.ads / .adb
+│   ├── uart_driver.ads / .adb
+├── startup.s
+├── linker.ld
+├── hydrogen_arm.gpr
+
+-- Pressure_fault.ads
+pragma Profile (Ravenscar);
+pragma Restrictions (No_Implicit_Heap_Allocations);
+
+with Gas_Ranges;
+
+package Pressure_Fault is
+   type Fault_Level is (None, Warning, Critical, Sensor_Fault, Overpressure);
+
+   protected type Pressure_Monitr is
+      procedure Set_Gas_type (G : Gas_Ranges.Gas_Type);
+      procedure Update (Pressure : Float);
+      procedure Evaluate (F : out Fault_Level);
+private
+   Gas : Gas_Ranges.Gas_Type := Gas_Ranges.Hydrogen;
+   P   : Float := 0.0;
+   Fault : Fault_level := None;
+end Pressure_Monitor;
+end Pressure_Fault;
+
+-- Hydrogen_Arm.gpr
+project Hydrogen_ARM is
+   for Target use "arm-eabi";
+   for Source_Dirs use ("src");
+   for Object_Dir  use "obj";
+   for Exec_Dir    use "bin";
+   for Main use ("main_control.adb");
+
+   package Compiler is
+      for Default_Switches ("Ada") use (
+         "-gnatR", "-gnatf", "-gnatws", "-gnat12",
+         "-fno-exceptions", "-nostdlib"
+      );
+   end Compiler;
+
+   package Linker is
+      for Linker_Options use (
+         "-T", "linker.ld",
+         "-nostartfiles"
+      );
+   end Linker;
+end Hydrogen_ARM;
+
+-- linker.ld
+MEMORY
+{
+  FLASH (rx) : ORIGIN = 0x08000000, LENGTH = 512K
+  RAM   (rwx): ORIGIN = 0x20000000, LENGTH = 128K
+}
+
+SECTIONS
+{
+  .text : { *(.text) } > FLASH
+  .data : { *(.data) } > RAM
+  .bss  : { *(.bss) }  > RAM
+}
+
+-- startup.s
+.section .text
+.global _start
+
+_start:
+    b Reset_Handler
+
+Reset_Handler:
+    bl main_control
+    b .
+
+sudo apt update
+sudo apt install gnat gcc-arm-none-eabi make
+gnatmake -P hydrogen_arm.gpr
+bin/hydrogen_control_arm.elf
+openocd -f interface/stlink.cfg -f target/stm32f4x.cfg \
+        -c "program bin/hydrogen_control_arm.elf verify reset exit"

@@ -1,0 +1,262 @@
+# -*- coding: utf-8 -*-
+import FreeCAD as App
+import Part
+import math
+
+# ---------------------------------------------
+# Document setup
+# ---------------------------------------------
+DOC_NAME = "CassiniUltra_HeavySatellite_WithCentralComputer"
+doc = App.ActiveDocument if App.ActiveDocument and App.ActiveDocument.Label == DOC_NAME else App.newDocument(DOC_NAME)
+doc = App.ActiveDocument
+
+# ---------------------------------------------
+# Parameters (global P dict)
+# ---------------------------------------------
+P = {
+    # Primary tank/bus geometry (Cassini-style)
+    "tank_len": 9800.0,
+    "tank_d": 5200.0,
+    "hull_t": 55.0,
+    "hull_outer_d": 6000.0,
+    "liner_t": 22.0,
+
+    "bus_len": 3800.0,
+    "bus_outer_d": 5800.0,
+    "bus_inner_d": 5000.0,
+
+    # Thermal protection / front cap
+    "tps_front_R": 3600.0,
+    "tps_front_t": 160.0,
+    "tps_offset": 680.0,
+    "shoulder_len": 1300.0,
+
+    # Payload bay (where the central computer will be placed)
+    "payload_bay_len": 2400.0,
+    "payload_bay_d": 5200.0,
+
+    # Radiation shield (outer, global)
+    "rad_shield_inner_d": 6400.0,
+    "rad_shield_t": 160.0,
+    "rad_shield_gap": 80.0,
+    "rad_shield_len": 6000.0,
+
+    # Central Computer FPGA core (key)
+    "ccore_h": 2400.0,         # height of the central computer (fits payload bay)
+    "ccore_d": 1800.0,         # diameter of thermal core
+    "ccore_flange_t": 120.0,   # flange thickness
+    "ccore_flange_d": 2200.0,  # flange diameter
+    "ccore_shields": [40.0, 25.0, 15.0],  # multilayer shielding thicknesses
+    "ccore_slot_count": 12,    # mezzanine slots
+    "ccore_slot_w": 160.0,     # mezzanine width
+    "ccore_slot_h": 1200.0,    # mezzanine height
+    "ccore_harness_count": 8,  # external harness channels
+    "ccore_harness_d": 80.0,   # harness diameter
+
+    # Visual offsets and placement
+    "origin_x": 0.0,
+    "origin_y": 0.0,
+    "origin_z": 0.0,
+}
+
+# ---------------------------------------------
+# Axes helpers and color
+# ---------------------------------------------
+X_AXIS = App.Vector(1, 0, 0)
+Y_AXIS = App.Vector(0, 1, 0)
+Z_AXIS = App.Vector(0, 0, 1)
+
+def rot_to_x():
+    return App.Rotation(Y_AXIS, 90)
+
+def add_obj(shape, name):
+    o = doc.addObject("Part::Feature", name)
+    o.Shape = shape
+    return o
+
+def color(obj, rgb):
+    if hasattr(obj, "ViewObject"):
+        obj.ViewObject.ShapeColor = rgb
+
+# ---------------------------------------------
+# Primitive creators
+# ---------------------------------------------
+def cyl_x(d, L, cx=0, cy=0, cz=0):
+    s = Part.makeCylinder(d/2.0, L)
+    s.Placement = App.Placement(App.Vector(cx - L/2.0, cy, cz), rot_to_x())
+    return s
+
+def cone_x(d1, d2, L, cx=0, cy=0, cz=0):
+    s = Part.makeCone(d1/2.0, d2/2.0, L)
+    s.Placement = App.Placement(App.Vector(cx - L/2.0, cy, cz), rot_to_x())
+    return s
+
+def box_at(l, w, t, x, y, z):
+    b = Part.makeBox(l, w, t)
+    b.translate(App.Vector(x, y, z))
+    return b
+
+# ---------------------------------------------
+# Core satellite structures (tank, hull, bus, TPS)
+# ---------------------------------------------
+def build_tank_and_hull():
+    tx = P["origin_x"]
+    # Tank
+    tank = cyl_x(P["tank_d"], P["tank_len"], cx=tx)
+    tank_o = add_obj(tank, "Tank")
+    color(tank_o, (0.20, 0.60, 1.00))
+
+    # Liner (inner tank wall)
+    liner = cyl_x(P["tank_d"] - 2*P["liner_t"], P["tank_len"] - 2*P["liner_t"], cx=tx)
+    liner_o = add_obj(liner, "TankLiner")
+    color(liner_o, (0.15, 0.45, 0.85))
+
+    # Hull outer shell
+    hull_outer = cyl_x(P["hull_outer_d"], P["tank_len"], cx=tx)
+    hull = hull_outer.cut(tank)
+    hull_o = add_obj(hull, "HullOuter")
+    color(hull_o, (0.12, 0.28, 0.50))
+
+    # Bus deck (forward section)
+    bus_shell = cyl_x(P["bus_outer_d"], P["bus_len"], cx=tx)
+    bus_inner = cyl_x(P["bus_inner_d"], P["bus_len"] - 2*P["hull_t"], cx=tx)
+    bus = bus_shell.cut(bus_inner)
+    bus_o = add_obj(bus, "BusDeck")
+    color(bus_o, (0.35, 0.35, 0.42))
+
+    # TPS front cap (spherical cut)
+    R = P["tps_front_R"]
+    tps_t = P["tps_front_t"]
+    cap_center_x = tx + P["tank_len"]/2.0 + P["tps_offset"]
+    sphere_out = Part.makeSphere(R)
+    sphere_in = Part.makeSphere(R - tps_t)
+    sphere_out.Placement = App.Placement(App.Vector(cap_center_x, 0, 0), App.Rotation())
+    sphere_in.Placement = App.Placement(App.Vector(cap_center_x, 0, 0), App.Rotation())
+    tps_box = Part.makeBox(2*R, 4*R, 4*R, App.Vector(cap_center_x, -2*R, -2*R))
+    tps_front = sphere_out.common(tps_box).cut(sphere_in.common(tps_box))
+    tps_o = add_obj(tps_front, "TPS_Front")
+    color(tps_o, (0.08, 0.08, 0.08))
+
+    # Shoulder cone
+    shoulder_cx = cap_center_x - P["shoulder_len"]/2.0
+    shoulder = cone_x(2*R, P["hull_outer_d"], P["shoulder_len"], cx=shoulder_cx)
+    shoulder_o = add_obj(shoulder, "TPS_Shoulder")
+    color(shoulder_o, (0.10, 0.10, 0.12))
+
+    return {
+        "tank_o": tank_o,
+        "bus_o": bus_o,
+        "cap_center_x": cap_center_x
+    }
+
+# ---------------------------------------------
+# Payload bay (housing for central computer)
+# ---------------------------------------------
+def build_payload_bay(center_x):
+    # Place payload bay just aft of bus deck for visibility
+    pb_len = P["payload_bay_len"]
+    pb_d = P["payload_bay_d"]
+
+    # Center payload bay at a chosen x
+    cx = center_x - (P["bus_len"]/2.0) - 400.0  # slight aft offset behind bus
+    payload = cyl_x(pb_d, pb_len, cx=cx)
+    payload_o = add_obj(payload, "PayloadBay")
+    color(payload_o, (0.40, 0.40, 0.48))
+
+    return {"cx": cx, "len": pb_len, "d": pb_d, "obj": payload_o}
+
+# ---------------------------------------------
+# Central Computer FPGA core (parametric)
+# ---------------------------------------------
+def build_central_computer(cx=0.0, cy=0.0, cz=0.0):
+    h = P["ccore_h"]
+    d = P["ccore_d"]
+
+    # Flange top
+    flange_top = Part.makeCylinder(P["ccore_flange_d"]/2.0, P["ccore_flange_t"])
+    flange_top.translate(App.Vector(cx, cy, cz + h/2.0))
+    ft_o = add_obj(flange_top, "CC_FlangeTop")
+    color(ft_o, (0.25, 0.25, 0.30))
+
+    # Flange bottom
+    flange_bot = Part.makeCylinder(P["ccore_flange_d"]/2.0, P["ccore_flange_t"])
+    flange_bot.translate(App.Vector(cx, cy, cz - h/2.0 - P["ccore_flange_t"]))
+    fb_o = add_obj(flange_bot, "CC_FlangeBot")
+    color(fb_o, (0.25, 0.25, 0.30))
+
+    # Thermal core
+    core = Part.makeCylinder(d/2.0, h)
+    core.translate(App.Vector(cx, cy, cz - h/2.0))
+    core_o = add_obj(core, "CC_ThermalCore")
+    color(core_o, (0.20, 0.40, 0.80))
+
+    # Multilayer shielding (concentric cylinders)
+    r = d/2.0
+    for i, t in enumerate(P["ccore_shields"]):
+        r += t
+        shield = Part.makeCylinder(r, h)
+        shield.translate(App.Vector(cx, cy, cz - h/2.0))
+        sh_o = add_obj(shield, f"CC_Shield_{i:02d}")
+        color(sh_o, (0.30, 0.30, 0.35))
+
+    # Mezzanine slots (radial frames)
+    angle_step = 360.0 / P["ccore_slot_count"]
+    slot_th = 10.0
+    slot_radius = r - 100.0
+    for i in range(P["ccore_slot_count"]):
+        ang = math.radians(i * angle_step)
+        # Place as vertical rectangular frames around the core
+        x = slot_radius * math.sin(ang)
+        y = slot_radius * math.cos(ang)
+        pcb = Part.makeBox(slot_th, P["ccore_slot_w"], P["ccore_slot_h"])
+        pcb.translate(App.Vector(cx + x, cy + y, cz - P["ccore_slot_h"]/2.0))
+        pcb_o = add_obj(pcb, f"CC_Slot_{i:02d}")
+        color(pcb_o, (0.60, 0.70, 0.75))
+
+    # Harness channels (external vertical conduits)
+    hr_radius = r + 60.0
+    for i in range(P["ccore_harness_count"]):
+        ang = math.radians(i * 360.0 / P["ccore_harness_count"])
+        x = hr_radius * math.sin(ang)
+        y = hr_radius * math.cos(ang)
+        harness = Part.makeCylinder(P["ccore_harness_d"]/2.0, h)
+        harness.translate(App.Vector(cx + x, cy + y, cz - h/2.0))
+        hr_o = add_obj(harness, f"CC_Harness_{i:02d}")
+        color(hr_o, (0.55, 0.55, 0.60))
+
+    return {"core_center": (cx, cy, cz)}
+
+# ---------------------------------------------
+# Optional: global radiation shield around payload section
+# ---------------------------------------------
+def build_global_rad_shield(section_center_x):
+    # Cylindrical high-Z shield segment for visualization
+    inner_r = P["rad_shield_inner_d"]/2.0
+    t = P["rad_shield_t"]
+    L = P["rad_shield_len"]
+    cx = section_center_x
+
+    inner = cyl_x(P["rad_shield_inner_d"], L, cx=cx)
+    outer = cyl_x(P["rad_shield_inner_d"] + 2*t, L, cx=cx)
+    shell = outer.cut(inner)
+    rs_o = add_obj(shell, "GlobalRadShield")
+    color(rs_o, (0.18, 0.18, 0.22))
+    return rs_o
+
+# ---------------------------------------------
+# Build sequence
+# ---------------------------------------------
+root = build_tank_and_hull()
+payload = build_payload_bay(center_x=root["cap_center_x"])
+
+# Place central computer at the geometric center of the payload bay
+cc_cx = payload["cx"]  # aligned with payload bay center along X
+cc_cy = 0.0
+cc_cz = 0.0
+build_central_computer(cx=cc_cx, cy=cc_cy, cz=cc_cz)
+
+# Optionally visualize a global radiation shield around the payload
+# Uncomment if desired:
+# build_global_rad_shield(section_center_x=payload["cx"])
+
+print("✅ CassiniUltra satellite with CentralComputer_FPGA built and ready for FEM/CFD.")

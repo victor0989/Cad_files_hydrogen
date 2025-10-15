@@ -1,0 +1,251 @@
+# -*- coding:utf-8 -*-
+import FreeCAD as App, FreeCADGui as Gui, Part, Draft, math
+
+doc_name="SolarParker_Cassini_Propulsion_FEM"
+if App.ActiveDocument is None or App.ActiveDocument.Label!=doc_name:
+    App.newDocument(doc_name)
+doc=App.ActiveDocument
+
+# ---------------- Helpers ----------------
+X_AXIS=App.Vector(1,0,0); Y_AXIS=App.Vector(0,1,0); Z_AXIS=App.Vector(0,0,1)
+def rot_to_x(): return App.Rotation(Y_AXIS,90)
+
+def add_obj(shape,name,color=(0.7,0.75,0.82),transparency=0):
+    if shape is None: return None
+    o=doc.addObject("Part::Feature",name); o.Shape=shape
+    v=o.ViewObject if Gui.getDocument(doc.Name) else None
+    if v: v.ShapeColor=color; v.Transparency=transparency; v.LineWidth=1
+    return o
+
+def safe_fillet(s,r):
+    try: return s.makeFillet(r,s.Edges)
+    except: return s
+
+def safe_chamfer(s,r):
+    try: return s.makeChamfer(r,s.Edges)
+    except: return s
+
+def is_valid(shape):
+    try: return (shape is not None) and (not shape.isNull()) and (shape.Volume > 0)
+    except: return False
+
+def fuse_many(solids):
+    solids=[s for s in solids if is_valid(s)]
+    if not solids: return None
+    u=solids[0]
+    for s in solids[1:]:
+        try: u=u.fuse(s)
+        except Exception: pass
+    return u if is_valid(u) else None
+
+def cut_many(base,cutters):
+    c=base
+    for k in cutters:
+        if is_valid(k):
+            try: c=c.cut(k)
+            except Exception: pass
+    return c
+
+def cyl_x(d,L,cx=0,cy=0,cz=0):
+    s=Part.makeCylinder(d/2.0,L)
+    s.Placement=App.Placement(App.Vector(cx-L/2.0,cy,cz),rot_to_x()); return s
+
+def cone_x(d1,d2,L,cx=0,cy=0,cz=0):
+    s=Part.makeCone(d1/2.0,d2/2.0,L)
+    s.Placement=App.Placement(App.Vector(cx-L/2.0,cy,cz),rot_to_x()); return s
+
+def pipe_sweep(diameter,path_pts,name="PipeSweep",rgb=(0.82,0.85,0.90)):
+    if len(path_pts)<2: return None
+    pts=[App.Vector(*p) for p in path_pts]
+    wire=Draft.makeWire(pts,closed=False); doc.recompute()
+    circ=Part.Circle(pts[0],X_AXIS,diameter/2.0).toShape()
+    circ_wire=Part.Wire([circ])
+    try:
+        shell=circ_wire.makePipeShell([wire.Shape],True,True,True)
+    except Exception:
+        return None
+    return add_obj(shell,name,rgb)
+
+# ---------------- Parameters ----------------
+P={"tank_len":6800.0,"tank_d":3000.0,"hull_t":25.0,"hull_outer_d":3800.0,
+   "tps_front_R":2600.0,"tps_front_t":90.0,"tps_offset":420.0,"shoulder_len":800.0,
+   "shade_len":1400.0,"shade_w":1000.0,"shade_t":55.0,"shade_r":2100.0,
+   "strut_d":140.0,"strut_r":1600.0,"bus_len":2600.0,"bus_outer_d":4200.0,"bus_inner_d":3700.0,
+   "hga_R":1800.0,"hga_t":14.0,"hga_offset":450.0,"hga_mast_len":1000.0,"hga_mast_d":140.0,
+   "rtg_box_l":1000.0,"rtg_box_w":560.0,"rtg_box_t":260.0,"rtg_arm_len":950.0,"rtg_arm_d":160.0,"rtg_arm_offset_z":900.0,
+   "chamber_len":2000.0,"chamber_d":1600.0,"throat_d":540.0,"exit_d":3200.0,"nozzle_len":2600.0,
+   "nozzle_mid_d":2000.0,"nozzle_mid_x":900.0,
+   "gimbal_ring_ro":1800.0,"gimbal_ring_ri":1720.0,"gimbal_ring_t":55.0,
+   "aft_shield_len":1100.0,"aft_shield_d1":3200.0,"aft_shield_d2":2200.0,
+   "mast_len":2000.0,"mast_d":120.0,"mast_tip_R":260.0,"mast_tip_t":10.0,
+   "solar_len":3000.0,"solar_w":950.0,"solar_t":36.0,
+   "tank_dome_R":1600.0,"tank_dome_t":18.0,"bulkhead_t":24.0,
+   "frame_ring_d":2600.0,"frame_ring_t":50.0,"frame_strut_d":180.0,"frame_plinth_t":35.0,
+   "engine_bay_len":1600.0,"pump_len":800.0,"pump_d":800.0,"line_LH2_d":180.0,"line_OX_d":220.0,
+   "line_clearance":220.0,"line_bend_R":320.0,"rad_len":1400.0,"rad_w":560.0,"rad_t":28.0,
+   "rad_z":1300.0,"frame_step":650.0,"stringer_n":16,"stringer_w":45.0,"stringer_h":35.0,"liner_t":10.0}
+
+# Extras cuántico/blueprint (sin dependencias circulares)
+window_w=520.0; window_h=320.0; window_t=18.0
+helical_turns=4; helical_pitch=1200.0; helical_d=160.0; helical_r=P["hull_outer_d"]/2.0-140.0
+tokamak_r=900.0; tokamak_t=55.0; tokamak_len=2000.0
+disk_r_inner=220.0; disk_r_outer=tokamak_r-140.0; disk_thick=20.0
+disk_pitch=160.0; disk_holes=16; disk_hole_d=40.0
+
+# ---------------- Base Parker/Cassini ----------------
+tank_cx=0.0
+tank=cyl_x(P["tank_d"],P["tank_len"],cx=tank_cx); tank_obj=add_obj(tank,"Tank",(0.20,0.60,1.00))
+hull=cyl_x(P["hull_outer_d"],P["tank_len"],cx=tank_cx); hull_shell=hull.cut(tank)
+hull_obj=add_obj(hull_shell,"HullOuter",(0.15,0.30,0.55))
+
+bus_cx=tank_cx
+bus_outer=cyl_x(P["bus_outer_d"],P["bus_len"],cx=bus_cx)
+bus_inner=cyl_x(P["bus_inner_d"],P["bus_len"]-2*P["hull_t"],cx=bus_cx)
+bus_shell=bus_outer.cut(bus_inner)
+bus_obj=add_obj(bus_shell,"BusDeck",(0.35,0.35,0.42))
+
+cap_center_x=tank_cx+P["tank_len"]/2.0+P["tps_offset"]
+R=P["tps_front_R"]; t=P["tps_front_t"]
+sphere_out=Part.makeSphere(R); sphere_in=Part.makeSphere(R-t)
+sphere_out.Placement=App.Placement(App.Vector(cap_center_x,0,0),App.Rotation()); sphere_in.Placement=sphere_out.Placement
+box=Part.makeBox(2*R,4*R,4*R,App.Vector(cap_center_x,-2*R,-2*R))
+tps_front=sphere_out.common(box).cut(sphere_in.common(box)); tps_front_obj=add_obj(tps_front,"TPS_Front",(0.08,0.08,0.08))
+
+shoulder_cx=cap_center_x-P["shoulder_len"]/2.0
+shoulder=cone_x(2.0*R,P["hull_outer_d"],P["shoulder_len"],cx=shoulder_cx); shoulder_obj=add_obj(shoulder,"TPS_Shoulder",(0.10,0.10,0.12))
+
+def make_shade(offset_vec,name):
+    s=Part.makeBox(P["shade_len"],P["shade_w"],P["shade_t"])
+    s.translate(App.Vector(cap_center_x-P["shade_len"]/2.0,0,0)); s.translate(offset_vec)
+    o=add_obj(s,name,(0.25,0.25,0.25)); return o
+r=P["shade_r"]; w=P["shade_w"]
+shadeYp=make_shade(App.Vector(0,r-w/2.0,0),"Shade_Yp")
+shadeYn=make_shade(App.Vector(0,-r-w/2.0,0),"Shade_Yn")
+shadeZp=make_shade(App.Vector(0,0,r-w/2.0),"Shade_Zp")
+shadeZn=make_shade(App.Vector(0,0,-r-w/2.0),"Shade_Zn")
+
+def strut_at(y,z,L,name):
+    cx=tank_cx+P["tank_len"]/2.0+L/2.0
+    s=cyl_x(P["strut_d"],L,cx=cx,cy=y,cz=z); o=add_obj(s,name,(0.45,0.45,0.45)); return o
+strut_len=P["tps_offset"]+P["shoulder_len"]
+strut1=strut_at(P["strut_r"],0,strut_len,"Strut_Yp")
+strut2=strut_at(-P["strut_r"],0,strut_len,"Strut_Yn")
+strut3=strut_at(0,P["strut_r"],strut_len,"Strut_Zp")
+strut4=strut_at(0,-P["strut_r"],strut_len,"Strut_Zn")
+
+ring_cx=shoulder_cx
+ring=Part.makeTorus(P["hull_outer_d"]/2.0,45.0)
+ring.Placement=App.Placement(App.Vector(ring_cx,0,0),rot_to_x())
+ring_obj=add_obj(ring,"StiffRing",(0.40,0.40,0.45))
+
+# ---------------- Ventana técnica ----------------
+win_cutter=Part.makeCylinder(window_w/2.0,window_t)
+win_cutter.Placement=App.Placement(App.Vector(tank_cx, -window_w/2.0, P["tank_len"]/2.0-window_h/2.0), rot_to_x())
+hull_cut=hull_obj.Shape.cut(win_cutter); hull_cut=safe_chamfer(hull_cut,1.5)
+hull_cut_obj=add_obj(hull_cut,"HullOuter_Cut",(0.15,0.30,0.55))
+
+# ---------------- Tokamak y discos cuánticos ----------------
+tok_cx=tank_cx+P["tank_len"]/2.0+P["tps_offset"]+P["shoulder_len"]+600.0
+tok_shell=cyl_x(tokamak_r*2.0, tokamak_len, cx=tok_cx)
+tok_inner=cyl_x(tokamak_r*2.0-2*tokamak_t, tokamak_len-40.0, cx=tok_cx)
+tok=tok_shell.cut(tok_inner); tok_obj=add_obj(tok,"Tokamak_Shell",(0.20,0.50,0.95),transparency=30)
+
+disk_solids=[]; z_local=60
+while z_local<tokamak_len-200:
+    d=Part.makeCylinder(disk_r_outer, disk_thick)
+    hole=Part.makeCylinder(disk_r_inner, disk_thick+2.0)
+    d=d.cut(hole)
+    holes=[]
+    for a in range(0,360,int(360/disk_holes)):
+        hx=(disk_r_outer+disk_r_inner)/2.0
+        ph=Part.makeCylinder(disk_hole_d/2.0, disk_thick+4.0)
+        ph.translate(App.Vector(hx,0,0))
+        m=App.Matrix(); m.rotateZ(a*math.pi/180.0); ph=ph.transformGeometry(m)
+        holes.append(ph)
+    d=cut_many(d,holes)
+    d.Placement=App.Placement(App.Vector(tok_cx - tokamak_len/2.0 + z_local,0,0),rot_to_x())
+    disk_solids.append(d); z_local+=disk_pitch
+disks=fuse_many(disk_solids); disks_obj=add_obj(disks,"Quantum_Disks",(0.85,0.70,0.25),transparency=10)
+
+# ---------------- Hélice azul externa alrededor del casco ----------------
+path=[]; start_z=P["tank_len"]*0.15
+for i in range(0,int(helical_turns*360)+1,8):
+    ang=math.radians(i)
+    x=tank_cx
+    y= helical_r*math.cos(ang)
+    z= start_z + (i/360.0)*helical_pitch
+    path.append((x,y,z))
+hcoil_obj=pipe_sweep(helical_d, path, name="Helical_Blue_Coil", rgb=(0.20,0.55,1.00))
+
+# ---------------- Motor y cámara de combustión (tu bloque) ----------------
+chamber=cyl_x(P["chamber_d"],P["chamber_len"],cx=tank_cx+P["tank_len"]/2.0+P["tps_offset"]+P["shoulder_len"])
+chamber_obj=add_obj(chamber,"CombustionChamber",(0.55,0.25,0.10))
+
+throat=cyl_x(P["throat_d"],100,cx=chamber.Placement.Base.x+P["chamber_len"]-50)
+throat_obj=add_obj(throat,"Throat",(0.50,0.20,0.10))
+
+nozzle=cone_x(P["throat_d"],P["exit_d"],P["nozzle_len"],cx=throat.Placement.Base.x+50)
+nozzle_obj=add_obj(nozzle,"Nozzle",(0.60,0.30,0.15))
+
+# Anillo de giro del motor (gimbal)
+gimbal=Part.makeTorus(P["gimbal_ring_ro"],(P["gimbal_ring_ro"]-P["gimbal_ring_ri"])/2.0)
+gimbal.Placement=App.Placement(App.Vector(chamber.Placement.Base.x+P["chamber_len"]/2.0,0,0),rot_to_x())
+gimbal_obj=add_obj(gimbal,"GimbalRing",(0.35,0.35,0.40))
+
+# Escudo trasero
+aft_shield=cyl_x(P["aft_shield_d1"],P["aft_shield_len"])
+aft_shield_obj=add_obj(aft_shield,"AftShield",(0.20,0.20,0.25))
+
+# Mástil y antena HGA
+mast=cyl_x(P["mast_d"],P["mast_len"],cx=tank_cx+P["tank_len"]/2.0+P["tps_offset"])
+mast_obj=add_obj(mast,"Mast",(0.50,0.50,0.50))
+
+hga=cyl_x(P["hga_R"]*2,P["hga_t"],cx=mast.Placement.Base.x+P["hga_offset"])
+hga_obj=add_obj(hga,"HGA",(0.70,0.70,0.70))
+
+# Cajas RTG y brazos
+rtg_box=Part.makeBox(P["rtg_box_l"],P["rtg_box_w"],P["rtg_box_t"],App.Vector(tank_cx+P["tank_len"]/2.0+P["rtg_arm_offset_z"],-P["rtg_box_w"]/2,0))
+rtg_box_obj=add_obj(rtg_box,"RTG_Box",(0.80,0.80,0.20))
+
+rtg_arm=cyl_x(P["rtg_arm_d"],P["rtg_arm_len"],cx=tank_cx+P["tank_len"]/2.0+P["rtg_arm_offset_z"])
+rtg_arm_obj=add_obj(rtg_arm,"RTG_Arm",(0.60,0.60,0.20))
+
+# Paneles solares
+solar=Part.makeBox(P["solar_len"],P["solar_w"],P["solar_t"])
+solar.translate(App.Vector(tank_cx+P["tank_len"]/2.0+P["solar_len"]/2,0,0))
+solar_obj=add_obj(solar,"SolarPanel",(0.20,0.50,0.85))
+
+# Radiadores
+rad=Part.makeBox(P["rad_len"],P["rad_w"],P["rad_t"])
+rad.translate(App.Vector(tank_cx+P["tank_len"]/2.0+P["solar_len"]/2+50,-P["rad_w"]/2,P["rad_z"]))
+rad_obj=add_obj(rad,"Radiator",(0.40,0.40,0.45))
+
+# Estructura de refuerzo
+frame_ring=cyl_x(P["frame_ring_d"],P["frame_ring_t"],cx=tank_cx+P["tank_len"]/2.0)
+frame_ring_obj=add_obj(frame_ring,"FrameRing",(0.50,0.50,0.55))
+
+# ---------------- Ensamblaje final ----------------
+assembly=fuse_many([
+    tank_obj.Shape,hull_obj.Shape,bus_obj.Shape,
+    tps_front_obj.Shape,shoulder_obj.Shape,
+    shadeYp.Shape,shadeYn.Shape,shadeZp.Shape,shadeZn.Shape,
+    strut1.Shape,strut2.Shape,strut3.Shape,strut4.Shape,
+    ring_obj.Shape,
+    hull_cut_obj.Shape,
+    tok_obj.Shape,disks_obj.Shape,
+    hcoil_obj.Shape if hcoil_obj else None,
+    gimbal_obj.Shape,aft_shield_obj.Shape,
+    mast_obj.Shape,hga_obj.Shape,
+    rtg_box_obj.Shape,rtg_arm_obj.Shape,
+    solar_obj.Shape,rad_obj.Shape,frame_ring_obj.Shape,
+    chamber_obj.Shape,throat_obj.Shape,nozzle_obj.Shape
+])
+
+final_obj=add_obj(assembly,"SolarParker_Propulsion_Unified",(0.72,0.77,0.80))
+
+doc.recompute()
+if Gui.getDocument(doc.Name):
+    Gui.activeDocument().activeView().viewAxonometric()
+    Gui.SendMsgToActiveView("ViewFit")
+
+print("✅ Sonda Solar Parker Cassini + núcleo cuántico + hélice azul: lista para FEM/CFD e iteración.")

@@ -1,0 +1,77 @@
+hydrogen_control_arm/
+├── src/
+│   ├── main_control.adb
+│   ├── gas_valve.ads / .adb
+│   ├── pressure_fault.ads / .adb
+│   ├── fault_gpio.ads / .adb
+│   ├── telemetry.ads / .adb
+│   ├── uart_driver.ads / .adb
+├── startup.s
+├── linker.ld
+├── hydrogen_arm.gpr
+
+$gnatmake -P hydrogen_arm.gpr
+bin/hydrogen_control_arm.elf
+$openocd -f interface/stlink.cfg -f target/stm32f4x.cfg \
+        -c "program bin/hydrogen_control_arm.elf verify reset exit"
+$sudo apt update
+$sudo apt install gnat gcc-arm-none-eabi openocd stlink make
+
+
+hydrogen_control_arm/
+├── src/
+│   ├── main_control.adb
+│   ├── gas_valve.ads / .adb
+│   ├── pressure_fault.ads / .adb
+│   ├── fault_gpio.ads / .adb
+│   ├── telemetry.ads / .adb
+│   ├── uart_driver.ads / .adb
+├── startup.s
+├── linker.ld
+├── hydrogen_arm.gpr
+
+--Hydrogen_ARM.gpr
+project Hydrogen_ARM is
+   for Target use "arm-eabi";
+   for Source_Dirs use ("src");
+   for Object_Dir  use "obj";
+   for Exec_Dir    use "bin";
+   for Main use ("main_control.adb");
+
+   package Compiler is
+      for Default_Switches ("Ada") use (
+         "-gnatR", "-gnatf", "-gnatws", "-gnat12",
+         "-fno-exceptions", "-nostdlib"
+      );
+   end Compiler;
+
+   package Linker is
+      for Linker_Options use (
+         "-T", "linker.ld",
+         "-nostartfiles"
+      );
+   end Linker;
+end Hydrogen_ARM;
+
+***************************************************************
+Abre GNAT Studio Community
+
+Ve a File → Open Project y selecciona hydrogen_arm.gpr
+
+Ve a Build → Project → Build All
+
+El binario .elf aparecerá en bin/hydrogen_control_arm.elf
+**********************************************************************
+$ openocd -f interface/stlink.cfg -f target/stm32f4x.cfg \
+        -c "program bin/hydrogen_control_arm.elf verify reset exit"
+*************************************************************************
+Usa pragma Profile (Ravenscar); en todos tus .adb y .ads
+
+Usa pragma Restrictions (No_Implicit_Heap_Allocations);
+
+Evita new, access, select, abort, Ada.Text_IO
+
+Usa protected type para sensores, válvulas, watchdogs
+
+Usa delay until para ciclos periódicos
+
