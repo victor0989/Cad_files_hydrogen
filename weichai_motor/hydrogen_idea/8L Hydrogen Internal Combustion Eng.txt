@@ -1,0 +1,6 @@
+8L Hydrogen Internal Combustion Engine: This engine utilizes an in-cylinder low-pressure direct hydrogen injection system, combined with low-energy spark ignition and precise management of cylinder temperature and flow fields to minimize pre-ignition risks. 
+WP15 Hydrogen Engine: With a displacement of 14.56L, this engine has a rated power of 390kW and a maximum torque of 2500 N.m. It incorporates precise hydrogen injection control technology for flexible and accurate hydrogen fuel supply. 
+Hydrogen Fuel Cell Power Systems: Weichai has also developed 260kW and 300kW hydrogen fuel cell engines and power systems, designed for applications such as heavy-duty trucks and long-haul transportation. 
+These engines and systems demonstrate advancements in hydrogen power technology for commercial vehicles.
+
+Me gustaria generar una vista ortografica CAD super detallada de un motor de hidrogeno  para camiones como el de la imagen que te paso, hazte con la informacion y ponme cotas, medidas y hazme una imagen ortografica CAD dalle del motor de hidrogeno.
